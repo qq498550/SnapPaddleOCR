@@ -167,6 +167,10 @@ SnapPaddleOCR/
 | pystray | 系统托盘图标 |
 | cv2 / shapely / pyclipper | OCR 管道依赖 |
 
+## 注意事项
+- 初次运行如果有以下提示：
+**OCR引擎初始化失败: PaddleOCR未安装: DLL load failed while importing \_pyclipper: 找不到指定的模块。** 请安装 [Microsoft Visual C++ Redistributable (2015-2022)](https://download.visualstudio.microsoft.com/download/pr/7ebf5fdb-36dc-4145-b0a0-90d3d5990a61/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe)
+
 ## 📝 许可
 
 本项目仅供学习参考，使用 PaddleOCR 和 PaddlePaddle 需遵守其相应的开源许可协议。
