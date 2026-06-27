@@ -5,8 +5,10 @@
     <strong>🖼️ 截图即识 · 📋 剪贴板识别 · ⚡ 快速复制 · 🎯 高精度</strong>
   </p>
 </p>
-<img width="500" height="500" alt="Screenshot" src="https://github.com/user-attachments/assets/e386790f-d362-47b6-af16-a6fda6c09d8e" />
----
+
+<div align="center">
+  <img width="600" height="454" alt="Screenshot" src="https://github.com/user-attachments/assets/e386790f-d362-47b6-af16-a6fda6c09d8e" />
+</div>
 
 ## ✨ 功能特性
 
