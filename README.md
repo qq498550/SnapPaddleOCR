@@ -6,7 +6,9 @@
   </p>
 </p>
 
----
+<div align="center">
+  <img width="600" height="454" alt="Screenshot" src="https://github.com/user-attachments/assets/e386790f-d362-47b6-af16-a6fda6c09d8e" />
+</div>
 
 ## ✨ 功能特性
 
