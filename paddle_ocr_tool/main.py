@@ -231,6 +231,12 @@ class PaddleOCRTool:
                         self._notify("OCR结果", f"已复制 {len(items)} 段文字")
                         if self._main_window and config.get("show_toast", True):
                             self._main_window.show_toast(text, duration=2500)
+                        # 同时记录到主窗口识别列表（不弹窗）
+                        self._run_in_main(
+                            lambda t=text: self._main_window.add_result(
+                                t, time.strftime('%H:%M:%S')
+                            )
+                        )
                 else:
                     self._notify("OCR失败", result["data"])
             except Exception as e:
