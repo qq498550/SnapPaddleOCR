@@ -78,6 +78,11 @@ class MainWindow:
         self._font_family = "TkDefaultFont"
         self._sel_result = None
         self._sel_event = None
+        self._title = "SnapPaddleOCR · 截图速识"
+
+    def set_title(self, title):
+        """设置窗口标题（在 show() 之前调用）"""
+        self._title = title
 
     def set_callbacks(self, on_screenshot=None, on_clipboard=None,
                       screenshot_hotkey_str=None, clipboard_hotkey_str=None,
@@ -147,7 +152,7 @@ class MainWindow:
         self._on_close_callback = on_close
 
         self._root = tk.Tk()
-        self._root.title("SnapPaddleOCR · 截图速识")
+        self._root.title(self._title)
         # 程序图标
         from ..paths import resource_path
         ico_path = resource_path("paddle_ocr_tool/ui/main.ico")

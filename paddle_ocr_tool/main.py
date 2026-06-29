@@ -12,6 +12,7 @@ setup_paddle_env()
 setup_dpi_awareness()
 ensure_sys_path()
 
+from . import __version__
 from .config import config
 from .ocr_engine import OCREngine
 from .screenshot import capture_screenshot_region, ScreenCapture
@@ -183,12 +184,15 @@ class PaddleOCRTool:
             on_save_settings=self._refresh_hotkeys,
         )
         
+        # 设置窗口标题（含版本号）
+        self._main_window.set_title(f"SnapPaddleOCR v{__version__}")
+
         # 直接在主线程中运行 show（会进入 mainloop）
         start_minimized = config.get("start_minimized", False)
         if start_minimized:
-            logger.info("SnapPaddleOCR 截图识别工具已启动（后台模式）")
+            logger.info("SnapPaddleOCR v%s 截图识别工具已启动（后台模式）", __version__)
         else:
-            logger.info("SnapPaddleOCR 截图识别工具已启动")
+            logger.info("SnapPaddleOCR v%s 截图识别工具已启动", __version__)
         self._on_ui_ready()
         self._main_window.show(on_close=self._on_window_close,
                                start_minimized=start_minimized)
