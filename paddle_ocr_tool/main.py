@@ -1,5 +1,6 @@
 import logging
 import ctypes
+import os
 import threading
 import time
 import sys
@@ -102,6 +103,41 @@ class PaddleOCRTool:
             hotkey_manager.register(config.get("clipboard_hotkey"), self._do_clipboard_ocr_threadsafe)
             hotkey_manager.register(config.get("quick_ocr_hotkey"), self._do_quick_ocr_threadsafe)
             logger.info("全局热键已注册")
+        # 启动系统锁屏/解锁监控，自动恢复失效的全局热键
+        self._start_session_monitor()
+
+    def _start_session_monitor(self):
+        """启动系统会话锁屏/解锁监控线程
+        
+        系统锁屏或休眠后 Windows 会撤销 keyboard 库注册的低级键盘钩子，
+        解锁后钩子不会自动恢复导致快捷键失效。
+        此线程周期性检测锁屏状态，在解锁后自动重连热键。
+        """
+        import ctypes
+
+        def _monitor_loop():
+            was_locked = False
+            while self._running:
+                try:
+                    # OpenInputDesktop 在锁屏时返回 NULL
+                    hdesk = ctypes.windll.user32.OpenInputDesktop(0, False, 0)
+                    is_locked = (hdesk == 0)
+                    if hdesk != 0:
+                        ctypes.windll.user32.CloseDesktop(hdesk)
+
+                    # 检测到从锁定→解锁的转换
+                    if not is_locked and was_locked:
+                        logger.info("检测到系统解锁，正在恢复全局热键...")
+                        time.sleep(1.5)  # 等待系统完全恢复
+                        hotkey_manager.reconnect()
+
+                    was_locked = is_locked
+                except Exception:
+                    pass
+                time.sleep(3)  # 每 3 秒检测一次
+
+        threading.Thread(target=_monitor_loop, daemon=True, name="session-monitor").start()
+        logger.info("会话锁屏监控已启动")
 
     def _refresh_hotkeys(self):
         """设置变更后重新注册全局热键 + 刷新 UI 按钮文字"""

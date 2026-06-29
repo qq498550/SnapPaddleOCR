@@ -66,6 +66,59 @@ class HotkeyManager:
         for hotkey in list(self._callbacks.keys()):
             self.unregister(hotkey)
     
+    def reconnect(self):
+        """完全重启热键监听器（用于锁屏/休眠恢复后自动修复）
+
+        系统锁屏后 Windows 会从底层撤销低级键盘钩子，且 keyboard
+        库内部的 ctypes 钩子句柄、监听器线程状态都已损坏。
+        仅 unhook_all()+add_hotkey() 无法恢复，必须强制重置模块。
+        """
+        if not self._callbacks:
+            return False
+        try:
+            # 1. 保存回调映射
+            saved = dict(self._callbacks)
+            self._callbacks.clear()
+
+            # 2. 完全关闭现有钩子和监听器
+            if self._keyboard:
+                try:
+                    self._keyboard.unhook_all()
+                except Exception:
+                    pass
+                self._keyboard = None
+            self._available = False
+
+            # 3. 等待系统完全恢复
+            time.sleep(0.5)
+
+            # 4. 强制重新导入 keyboard 模块（清空 sys.modules 缓存）
+            #    确保全新的 Windows 钩子句柄和监听器线程
+            import sys
+            for mod in list(sys.modules.keys()):
+                if mod == 'keyboard' or mod.startswith('keyboard.'):
+                    del sys.modules[mod]
+
+            import keyboard
+            self._keyboard = keyboard
+            self._available = True
+
+            # 5. 重新注册所有热键
+            reconnected = 0
+            for hotkey, callback in saved.items():
+                try:
+                    self._keyboard.add_hotkey(hotkey, callback)
+                    self._callbacks[hotkey] = callback
+                    reconnected += 1
+                except Exception as e:
+                    logger.warning(f"重连热键失败 {hotkey}: {e}")
+
+            logger.info("全局热键监听器已完全重启 (%d/%d)", reconnected, len(saved))
+            return reconnected > 0
+        except Exception as e:
+            logger.error(f"热键重连失败: {e}")
+            return False
+
     def close(self):
         """关闭热键管理器"""
         self.unregister_all()
