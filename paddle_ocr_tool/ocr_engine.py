@@ -4,7 +4,7 @@
 import logging
 import os
 import shutil
-import tempfile
+
 from pathlib import Path
 
 # 在导入 paddle 前确保环境变量已设置

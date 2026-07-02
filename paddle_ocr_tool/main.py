@@ -49,9 +49,6 @@ def _check_single_instance() -> bool:
         return True
 
 
-import logging
-
-
 def _format_hotkey_for_display(hotkey):
     """将 'ctrl+shift+f' 格式转为 'Ctrl+Shift+F' 显示格式"""
     return "+".join(w.capitalize() for w in hotkey.split("+"))
@@ -327,17 +324,27 @@ class PaddleOCRTool:
         logger.info(text)
     
     def _copy_to_clipboard(self, text):
+        """线程安全地复制文本到剪贴板"""
         try:
             import tkinter as tk
-            r = tk.Tk()
-            r.withdraw()
-            r.clipboard_clear()
-            r.clipboard_append(text)
-            r.update()
-            r.destroy()
+            # 使用已有的 root 实例，避免创建新的 Tk 实例导致资源泄漏
+            if self._main_window and self._main_window._root:
+                self._run_in_main(lambda: (
+                    self._main_window._root.clipboard_clear(),
+                    self._main_window._root.clipboard_append(text),
+                    self._main_window._root.update()
+                ))
+            else:
+                # 备用方案：创建临时 Tk 实例（仅在必要时）
+                r = tk.Tk()
+                r.withdraw()
+                r.clipboard_clear()
+                r.clipboard_append(text)
+                r.update()
+                r.destroy()
         except Exception as e:
-            logger.warning(f"复制到剪贴板失败: {e}")
-    
+            logger.warning(f"复制到剪贴板失败：{e}")
+
     def _notify(self, title, message):
         if self._tray:
             self._tray.notify(title, message)
