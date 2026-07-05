@@ -11,7 +11,9 @@ if _project_root not in sys.path:
 os.environ.setdefault("PADDLE_PDX_CACHE_HOME",
                       os.path.join(_project_root, ".paddlex_cache"))
 
+from paddle_ocr_tool import __version__
 from paddle_ocr_tool.main import main
 
 if __name__ == "__main__":
+    print(f"SnapPaddleOCR v{__version__} 启动中...")
     main()

@@ -1,5 +1,6 @@
 {
   "language": "ch",
+  "app_version": "1.0.0",
   "ocr_version": "PP-OCRv6",
   "device": "cpu",
   "enable_mkldnn": false,

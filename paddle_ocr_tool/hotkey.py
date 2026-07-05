@@ -42,6 +42,10 @@ class HotkeyManager:
             return False
         
         try:
+            # 不使用 suppress=True：虽然可以阻止组合键传递给前台应用，
+            # 但在 Windows 低级键盘钩子中，suppress 可能因异常导致修饰键
+            # （Shift/Ctrl/Alt）的"抬起"事件丢失，使系统认为修饰键一直
+            # 处于按下状态，造成全局键盘输入混乱。
             self._keyboard.add_hotkey(hotkey, callback)
             self._callbacks[hotkey] = callback
             logger.info(f"已注册热键: {hotkey}")
@@ -118,6 +122,30 @@ class HotkeyManager:
         except Exception as e:
             logger.error(f"热键重连失败: {e}")
             return False
+
+    def is_alive(self):
+        """检测键盘钩子是否仍然存活
+
+        Windows 可能在以下场景静默移除低级键盘钩子：
+        - 显示模式切换（全屏应用、分辨率变更）
+        - UAC 提权弹窗
+        - 某些安全软件/游戏的反作弊系统
+        - 钩子回调超时
+
+        通过检查 keyboard 内部钩子状态来判断是否需要重连。
+        """
+        if not self._available or not self._keyboard:
+            return False
+        try:
+            # keyboard 库内部的 _hooks 字典记录了活跃钩子
+            # 如果没有任何钩子，说明已被系统移除
+            hooks = getattr(self._keyboard, '_hooks', None)
+            if hooks is None:
+                return bool(self._callbacks)
+            # 有钩子记录就算存活
+            return bool(hooks)
+        except Exception:
+            return bool(self._callbacks)
 
     def close(self):
         """关闭热键管理器"""

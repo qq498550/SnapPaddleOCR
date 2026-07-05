@@ -12,6 +12,7 @@ setup_paddle_env()
 setup_dpi_awareness()
 ensure_sys_path()
 
+from . import __version__
 from .config import config
 from .ocr_engine import OCREngine
 from .screenshot import capture_screenshot_region, ScreenCapture
@@ -66,6 +67,9 @@ class PaddleOCRTool:
         self._running = False
         self._ocr_lock = threading.Lock()
         self._ocr_ready = threading.Event()
+        # 热键防抖：防止快速连续触发（如连按快捷键）导致多次 OCR 叠加
+        self._last_ocr_time = 0.0
+        self._ocr_debounce_sec = 0.8
     
     def run(self):
         """启动应用 - 主线程运行"""
@@ -111,12 +115,17 @@ class PaddleOCRTool:
         
         系统锁屏或休眠后 Windows 会撤销 keyboard 库注册的低级键盘钩子，
         解锁后钩子不会自动恢复导致快捷键失效。
-        此线程周期性检测锁屏状态，在解锁后自动重连热键。
+        此线程周期性检测锁屏状态，在解锁后自动重连热键；
+        同时每 5 分钟做一次钩子存活检测，处理 Windows 静默移除钩子的情况
+        （如显示模式切换、UAC 弹窗等）。
         """
         import ctypes
 
         def _monitor_loop():
             was_locked = False
+            last_health_check = time.time()
+            HEALTH_CHECK_INTERVAL = 300  # 5 分钟健康检查间隔
+            
             while self._running:
                 try:
                     # OpenInputDesktop 在锁屏时返回 NULL
@@ -132,6 +141,16 @@ class PaddleOCRTool:
                         hotkey_manager.reconnect()
 
                     was_locked = is_locked
+                    
+                    # 周期性健康检查：Windows 可能在锁屏之外的其他场景
+                    # 静默移除低级键盘钩子（显示模式切换/UAC/全屏应用等）
+                    now = time.time()
+                    if not is_locked and (now - last_health_check >= HEALTH_CHECK_INTERVAL):
+                        last_health_check = now
+                        if hotkey_manager._callbacks and not hotkey_manager.is_alive():
+                            logger.warning("检测到键盘钩子已失效，正在自动恢复...")
+                            hotkey_manager.reconnect()
+                            
                 except Exception:
                     pass
                 time.sleep(3)  # 每 3 秒检测一次
@@ -183,12 +202,15 @@ class PaddleOCRTool:
             on_save_settings=self._refresh_hotkeys,
         )
         
+        # 设置窗口标题（含版本号）
+        self._main_window.set_title(f"SnapPaddleOCR v{__version__}")
+
         # 直接在主线程中运行 show（会进入 mainloop）
         start_minimized = config.get("start_minimized", False)
         if start_minimized:
-            logger.info("SnapPaddleOCR 截图识别工具已启动（后台模式）")
+            logger.info("SnapPaddleOCR v%s 截图识别工具已启动（后台模式）", __version__)
         else:
-            logger.info("SnapPaddleOCR 截图识别工具已启动")
+            logger.info("SnapPaddleOCR v%s 截图识别工具已启动", __version__)
         self._on_ui_ready()
         self._main_window.show(on_close=self._on_window_close,
                                start_minimized=start_minimized)
@@ -201,13 +223,27 @@ class PaddleOCRTool:
             self._main_window._root.after(0, func, *args, **kwargs)
     
     def _do_screenshot_ocr_threadsafe(self):
+        if not self._debounce_ocr():
+            return
         threading.Thread(target=self._do_screenshot_ocr, daemon=True).start()
     
     def _do_clipboard_ocr_threadsafe(self):
+        if not self._debounce_ocr():
+            return
         threading.Thread(target=self._do_clipboard_ocr, daemon=True).start()
     
     def _do_quick_ocr_threadsafe(self):
+        if not self._debounce_ocr():
+            return
         threading.Thread(target=self._do_quick_ocr, daemon=True).start()
+
+    def _debounce_ocr(self):
+        """热键防抖：短时间内重复触发则忽略"""
+        now = time.time()
+        if now - self._last_ocr_time < self._ocr_debounce_sec:
+            return False
+        self._last_ocr_time = now
+        return True
     
     def _toggle_window_threadsafe(self):
         """托盘图标点击：窗口可见时隐藏，隐藏时显示"""
@@ -323,16 +359,25 @@ class PaddleOCRTool:
         logger.info(text)
     
     def _copy_to_clipboard(self, text):
-        try:
-            import tkinter as tk
-            r = tk.Tk()
-            r.withdraw()
-            r.clipboard_clear()
-            r.clipboard_append(text)
-            r.update()
-            r.destroy()
-        except Exception as e:
-            logger.warning(f"复制到剪贴板失败: {e}")
+        """将文本复制到系统剪贴板（主线程安全）
+        
+        注意：必须在主线程中操作 tkinter 剪贴板，后台线程中创建
+        临时 Tk() 实例会导致 Tcl 解释器状态损坏，造成复制静默失败
+        甚至干扰主窗口事件循环。
+        """
+        def _do_copy():
+            try:
+                if self._main_window and self._main_window._root:
+                    root = self._main_window._root
+                    root.clipboard_clear()
+                    root.clipboard_append(text)
+                    # 多次刷新消息队列，确保剪贴板写入在窗口销毁前完成
+                    root.update_idletasks()
+                    root.update()
+            except Exception as e:
+                logger.warning(f"复制到剪贴板失败: {e}")
+
+        self._run_in_main(_do_copy)
     
     def _notify(self, title, message):
         if self._tray:

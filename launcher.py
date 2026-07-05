@@ -101,9 +101,15 @@ def install_packages(packages):
 
 
 def main():
+    # ── 读取版本号 ──
+    try:
+        from paddle_ocr_tool import __version__ as app_version
+    except ImportError:
+        app_version = "?.?.?"
+
     print()
     print("  ╔══════════════════════════════════════════════╗")
-    print("  ║    SnapPaddleOCR · 截图速识 - 启动器        ║")
+    print(f"  ║    SnapPaddleOCR v{app_version:<7s} · 截图速识          ║")
     print("  ╚══════════════════════════════════════════════╝")
 
     # ── 必须在任何 paddle 导入前设置环境变量 ──
