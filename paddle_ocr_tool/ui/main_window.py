@@ -465,6 +465,8 @@ class MainWindow:
         if all_text:
             self._root.clipboard_clear()
             self._root.clipboard_append(all_text)
+            self._root.update_idletasks()
+            self._root.update()
             self.set_status("已复制全部到剪贴板")
 
     def _on_settings(self):
@@ -521,6 +523,8 @@ class MainWindow:
         def _copy_this(t=text):
             self._root.clipboard_clear()
             self._root.clipboard_append(t)
+            self._root.update_idletasks()
+            self._root.update()
             self.set_status("已复制")
 
         copy_btn = tk.Button(header, text=" 复制 ",
@@ -560,6 +564,8 @@ class MainWindow:
         def _on_body_click(e, t=text):
             self._root.clipboard_clear()
             self._root.clipboard_append(t)
+            self._root.update_idletasks()
+            self._root.update()
             self.set_status("已复制")
         body.bind("<Button-1>", _on_body_click)
         body.bind("<Enter>", lambda e, b=body: b.config(bg=C_HOVER))

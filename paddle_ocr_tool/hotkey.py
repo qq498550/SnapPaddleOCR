@@ -42,7 +42,9 @@ class HotkeyManager:
             return False
         
         try:
-            self._keyboard.add_hotkey(hotkey, callback)
+            # suppress=True 阻止组合键传递给前台应用，避免按键冲突导致
+            # 其他应用消费按键后 Windows 钩子链出现异常
+            self._keyboard.add_hotkey(hotkey, callback, suppress=True)
             self._callbacks[hotkey] = callback
             logger.info(f"已注册热键: {hotkey}")
             return True
@@ -107,7 +109,7 @@ class HotkeyManager:
             reconnected = 0
             for hotkey, callback in saved.items():
                 try:
-                    self._keyboard.add_hotkey(hotkey, callback)
+                    self._keyboard.add_hotkey(hotkey, callback, suppress=True)
                     self._callbacks[hotkey] = callback
                     reconnected += 1
                 except Exception as e:
@@ -118,6 +120,30 @@ class HotkeyManager:
         except Exception as e:
             logger.error(f"热键重连失败: {e}")
             return False
+
+    def is_alive(self):
+        """检测键盘钩子是否仍然存活
+
+        Windows 可能在以下场景静默移除低级键盘钩子：
+        - 显示模式切换（全屏应用、分辨率变更）
+        - UAC 提权弹窗
+        - 某些安全软件/游戏的反作弊系统
+        - 钩子回调超时
+
+        通过检查 keyboard 内部钩子状态来判断是否需要重连。
+        """
+        if not self._available or not self._keyboard:
+            return False
+        try:
+            # keyboard 库内部的 _hooks 字典记录了活跃钩子
+            # 如果没有任何钩子，说明已被系统移除
+            hooks = getattr(self._keyboard, '_hooks', None)
+            if hooks is None:
+                return bool(self._callbacks)
+            # 有钩子记录就算存活
+            return bool(hooks)
+        except Exception:
+            return bool(self._callbacks)
 
     def close(self):
         """关闭热键管理器"""
