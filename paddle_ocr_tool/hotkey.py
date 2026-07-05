@@ -42,9 +42,11 @@ class HotkeyManager:
             return False
         
         try:
-            # suppress=True 阻止组合键传递给前台应用，避免按键冲突导致
-            # 其他应用消费按键后 Windows 钩子链出现异常
-            self._keyboard.add_hotkey(hotkey, callback, suppress=True)
+            # 不使用 suppress=True：虽然可以阻止组合键传递给前台应用，
+            # 但在 Windows 低级键盘钩子中，suppress 可能因异常导致修饰键
+            # （Shift/Ctrl/Alt）的"抬起"事件丢失，使系统认为修饰键一直
+            # 处于按下状态，造成全局键盘输入混乱。
+            self._keyboard.add_hotkey(hotkey, callback)
             self._callbacks[hotkey] = callback
             logger.info(f"已注册热键: {hotkey}")
             return True
@@ -109,7 +111,7 @@ class HotkeyManager:
             reconnected = 0
             for hotkey, callback in saved.items():
                 try:
-                    self._keyboard.add_hotkey(hotkey, callback, suppress=True)
+                    self._keyboard.add_hotkey(hotkey, callback)
                     self._callbacks[hotkey] = callback
                     reconnected += 1
                 except Exception as e:
