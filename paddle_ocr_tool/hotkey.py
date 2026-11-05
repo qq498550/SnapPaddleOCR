@@ -4,21 +4,24 @@
 import threading
 import time
 import logging
+from typing import Callable, Dict
 
-logger = logging.getLogger("PaddleOCR_Tool.Hotkey")
+logger = logging.getLogger("SnapPaddleOCR.Hotkey")
+
+HotkeyBinding = Dict[str, Callable[[], None]]
 
 
 class HotkeyManager:
     """全局热键管理器"""
-    
-    def __init__(self):
-        self._callbacks = {}
+
+    def __init__(self) -> None:
+        self._callbacks: HotkeyBinding = {}
         self._running = False
         self._thread = None
         self._keyboard = None
         self._available = False
-    
-    def init(self):
+
+    def init(self) -> bool:
         """初始化热键系统"""
         try:
             import keyboard
@@ -29,10 +32,20 @@ class HotkeyManager:
             logger.warning("keyboard模块未安装，全局热键不可用")
             self._available = False
             return False
-    
-    def register(self, hotkey, callback):
+
+    def register_all(self, bindings: HotkeyBinding) -> None:
+        """批量注册全局热键
+
+        Args:
+            bindings: {热键字符串: 回调} 映射，如
+                {"ctrl+shift+f": on_screenshot, ...}
+        """
+        for hotkey, callback in bindings.items():
+            self.register(hotkey, callback)
+
+    def register(self, hotkey: str, callback: Callable[[], None]) -> bool:
         """注册全局热键
-        
+
         Args:
             hotkey: 快捷键字符串，如 "ctrl+shift+f"
             callback: 回调函数
@@ -54,7 +67,7 @@ class HotkeyManager:
             logger.error(f"注册热键失败 {hotkey}: {e}")
             return False
     
-    def unregister(self, hotkey):
+    def unregister(self, hotkey: str) -> None:
         """取消注册热键"""
         if not self._available or hotkey not in self._callbacks:
             return
@@ -65,12 +78,17 @@ class HotkeyManager:
         except Exception as e:
             logger.error(f"取消热键失败 {hotkey}: {e}")
     
-    def unregister_all(self):
+    def unregister_all(self) -> None:
         """取消所有热键"""
         for hotkey in list(self._callbacks.keys()):
             self.unregister(hotkey)
+
+    @property
+    def has_callbacks(self) -> bool:
+        """当前是否有已注册的热键回调"""
+        return bool(self._callbacks)
     
-    def reconnect(self):
+    def reconnect(self) -> bool:
         """完全重启热键监听器（用于锁屏/休眠恢复后自动修复）
 
         系统锁屏后 Windows 会从底层撤销低级键盘钩子，且 keyboard
@@ -123,7 +141,7 @@ class HotkeyManager:
             logger.error(f"热键重连失败: {e}")
             return False
 
-    def is_alive(self):
+    def is_alive(self) -> bool:
         """检测键盘钩子是否仍然存活
 
         Windows 可能在以下场景静默移除低级键盘钩子：
@@ -147,7 +165,7 @@ class HotkeyManager:
         except Exception:
             return bool(self._callbacks)
 
-    def close(self):
+    def close(self) -> None:
         """关闭热键管理器"""
         self.unregister_all()
         if self._keyboard:

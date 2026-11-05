@@ -4,6 +4,16 @@ import os
 import sys
 import tkinter as tk
 from tkinter import ttk
+from . import theme
+from .theme import (
+    BG,
+    BORDER,
+    PRIMARY,
+    PRIMARY_LIGHT,
+    SURFACE,
+    TEXT,
+    TEXT_SECONDARY,
+)
 from ..config import config
 
 _STARTUP_DIR = os.path.join(
@@ -40,15 +50,6 @@ def _remove_shortcut(link_path):
     except Exception:
         return False
 
-C_PRIMARY   = "#1565C0"
-C_PRIMARY_L = "#1E88E5"
-C_BG        = "#F5F5F5"
-C_SURFACE   = "#FFFFFF"
-C_TEXT      = "#212121"
-C_TEXT_SUB  = "#757575"
-C_BORDER    = "#E0E0E0"
-
-
 class SettingsWindow:
     """设置窗口"""
 
@@ -62,46 +63,51 @@ class SettingsWindow:
         self._dialog.resizable(False, False)
         self._dialog.transient(parent)
         self._dialog.grab_set()
-        self._dialog.configure(bg=C_BG)
+        self._dialog.configure(bg=BG)
 
         # ── 顶部标题 ──
-        header = tk.Frame(self._dialog, bg=C_PRIMARY, height=44)
+        header = tk.Frame(self._dialog, bg=PRIMARY, height=44)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
         tk.Label(header, text="设置", font=(self._font, 13, "bold"),
-                 fg="white", bg=C_PRIMARY).pack(side=tk.LEFT, padx=16, pady=9)
+                 fg="white", bg=PRIMARY).pack(side=tk.LEFT, padx=16, pady=9)
 
         # ── 可滚动内容区 ──
-        outer = tk.Frame(self._dialog, bg=C_BG)
+        outer = tk.Frame(self._dialog, bg=BG)
         outer.pack(fill=tk.BOTH, expand=True)
 
-        canvas_bg = tk.Canvas(outer, bg=C_BG, highlightthickness=0, borderwidth=0)
+        canvas_bg = tk.Canvas(outer, bg=BG, highlightthickness=0, borderwidth=0)
         scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas_bg.yview)
-        scroll_frame = tk.Frame(canvas_bg, bg=C_BG)
+        scroll_frame = tk.Frame(canvas_bg, bg=BG)
 
         scroll_frame.bind("<Configure>",
                           lambda e: canvas_bg.configure(scrollregion=canvas_bg.bbox("all")))
         canvas_bg.create_window((0, 0), window=scroll_frame, anchor="nw", tags="inner")
         canvas_bg.configure(yscrollcommand=scrollbar.set)
 
-        def _on_mw(event):
-            canvas_bg.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas_bg.bind_all("<MouseWheel>", _on_mw)
-        self._dialog.protocol("WM_DELETE_WINDOW", lambda: (
-            canvas_bg.unbind_all("<MouseWheel>"), self._dialog.destroy()))
+        on_wheel = theme.make_wheel_scroller(canvas_bg)
+        canvas_bg.bind_all("<MouseWheel>", on_wheel)
+
+        def _on_dialog_destroy(event):
+            # 对话框销毁时解除 bind_all 劫持，避免全局滚轮绑定残留
+            if event.widget is self._dialog:
+                canvas_bg.unbind_all("<MouseWheel>")
+
+        self._dialog.bind("<Destroy>", _on_dialog_destroy)
+        self._dialog.protocol("WM_DELETE_WINDOW", self._dialog.destroy)
 
         canvas_bg.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # ── 通用卡片 ──
         def _card(parent_outer, title):
-            card = tk.Frame(parent_outer, bg=C_SURFACE,
-                            highlightbackground=C_BORDER,
+            card = tk.Frame(parent_outer, bg=SURFACE,
+                            highlightbackground=BORDER,
                             highlightthickness=1,
                             padx=16, pady=12)
             card.pack(fill=tk.X, padx=12, pady=(0, 10))
             tk.Label(card, text=title, font=(self._font, 11, "bold"),
-                     fg=C_PRIMARY, bg=C_SURFACE).pack(anchor=tk.W, pady=(0, 8))
+                     fg=PRIMARY, bg=SURFACE).pack(anchor=tk.W, pady=(0, 8))
             return card
 
         self._entries = {}
@@ -109,19 +115,19 @@ class SettingsWindow:
         # ── 快捷键 ──
         card1 = _card(scroll_frame, "⌨  快捷键设置")
         tk.Label(card1, text="点击输入框后直接按下组合键即可设置",
-                 font=(self._font, 8), fg=C_TEXT_SUB, bg=C_SURFACE).pack(anchor=tk.W, pady=(0, 6))
+                 font=(self._font, 8), fg=TEXT_SECONDARY, bg=SURFACE).pack(anchor=tk.W, pady=(0, 6))
         for key, label, default in [
             ("screenshot_hotkey", "截图OCR", "ctrl+shift+f"),
             ("clipboard_hotkey", "剪贴板OCR", "ctrl+shift+g"),
             ("quick_ocr_hotkey", "快速OCR（不弹窗）", "ctrl+shift+d"),
         ]:
-            row = tk.Frame(card1, bg=C_SURFACE)
+            row = tk.Frame(card1, bg=SURFACE)
             row.pack(fill=tk.X, pady=3)
             tk.Label(row, text=label, font=(self._font, 10),
-                     fg=C_TEXT, bg=C_SURFACE,
+                     fg=TEXT, bg=SURFACE,
                      width=16, anchor=tk.W).pack(side=tk.LEFT)
             entry = ttk.Entry(row, font=(self._font, 10), width=22,
-                             foreground=C_TEXT_SUB)
+                             foreground=TEXT_SECONDARY)
             entry.insert(0, config.get(key, default))
             entry.pack(side=tk.LEFT, padx=(4, 0))
             self._setup_hotkey_capture(entry)
@@ -134,10 +140,10 @@ class SettingsWindow:
             ("text_det_box_thresh", "文本框阈值", 0.6),
             ("text_rec_score_thresh", "识别置信度", 0.5),
         ]:
-            row = tk.Frame(card2, bg=C_SURFACE)
+            row = tk.Frame(card2, bg=SURFACE)
             row.pack(fill=tk.X, pady=4)
             tk.Label(row, text=label, font=(self._font, 10),
-                     fg=C_TEXT, bg=C_SURFACE,
+                     fg=TEXT, bg=SURFACE,
                      width=16, anchor=tk.W).pack(side=tk.LEFT)
 
             val = config.get(key, default)
@@ -148,7 +154,7 @@ class SettingsWindow:
 
             val_lbl = tk.Label(row, text=f"{val:.2f}",
                                font=(self._font, 9, "bold"),
-                               fg=C_PRIMARY, bg=C_SURFACE,
+                               fg=PRIMARY, bg=SURFACE,
                                width=4, anchor=tk.W)
             val_lbl.pack(side=tk.LEFT)
 
@@ -161,16 +167,16 @@ class SettingsWindow:
                      "text_rec_score_thresh": "低于此值过滤"}
             tk.Label(row, text=descs.get(key, ""),
                      font=(self._font, 8),
-                     fg=C_TEXT_SUB, bg=C_SURFACE).pack(side=tk.LEFT, padx=(4, 0))
+                     fg=TEXT_SECONDARY, bg=SURFACE).pack(side=tk.LEFT, padx=(4, 0))
             self._entries[key] = var
 
         # ── 推理设置 ──
         card_infer = _card(scroll_frame, "⚡  推理设置")
         cpu_count = os.cpu_count() or 4
-        row_infer = tk.Frame(card_infer, bg=C_SURFACE)
+        row_infer = tk.Frame(card_infer, bg=SURFACE)
         row_infer.pack(fill=tk.X, pady=4)
         tk.Label(row_infer, text="CPU 线程数", font=(self._font, 10),
-                 fg=C_TEXT, bg=C_SURFACE,
+                 fg=TEXT, bg=SURFACE,
                  width=16, anchor=tk.W).pack(side=tk.LEFT)
         thread_vals = [str(i) for i in range(1, cpu_count + 1)]
         cur_threads = str(config.get("cpu_threads", cpu_count))
@@ -183,7 +189,7 @@ class SettingsWindow:
         cb.pack(side=tk.LEFT, padx=(4, 6))
         tk.Label(row_infer, text=f"  共 {cpu_count} 核，数值越大识别越快",
                  font=(self._font, 8),
-                 fg=C_TEXT_SUB, bg=C_SURFACE).pack(side=tk.LEFT)
+                 fg=TEXT_SECONDARY, bg=SURFACE).pack(side=tk.LEFT)
 
         # ── 输出设置 ──
         card3 = _card(scroll_frame, "📤  输出设置")
@@ -200,7 +206,7 @@ class SettingsWindow:
         # ── 界面设置 ──
         card4 = _card(scroll_frame, "🖥  界面设置")
         self._close_action_var = tk.StringVar(value=config.get("close_action", "minimize"))
-        df = tk.Frame(card4, bg=C_SURFACE)
+        df = tk.Frame(card4, bg=SURFACE)
         df.pack(fill=tk.X)
         ttk.Radiobutton(df, text="最小化到托盘",
                         variable=self._close_action_var,
@@ -209,7 +215,7 @@ class SettingsWindow:
                         variable=self._close_action_var,
                         value="exit").pack(anchor=tk.W, pady=2)
         tk.Label(card4, text="主窗口关闭时的行为",
-                 font=(self._font, 8), fg=C_TEXT_SUB, bg=C_SURFACE,
+                 font=(self._font, 8), fg=TEXT_SECONDARY, bg=SURFACE,
                  anchor=tk.W).pack(fill=tk.X, pady=(4, 0))
 
         # 开机自启
@@ -241,8 +247,8 @@ class SettingsWindow:
         cb.bind("<<ComboboxSelected>>", lambda e: None)
 
         # ── 底部按钮 ──
-        btn_bar = tk.Frame(self._dialog, bg=C_SURFACE,
-                           highlightbackground=C_BORDER,
+        btn_bar = tk.Frame(self._dialog, bg=SURFACE,
+                           highlightbackground=BORDER,
                            highlightthickness=1, height=50)
         btn_bar.pack(fill=tk.X)
         btn_bar.pack_propagate(False)
@@ -252,16 +258,16 @@ class SettingsWindow:
 
         save_btn = tk.Button(btn_bar, text="  保存设置  ",
                              font=(self._font, 10, "bold"),
-                             fg="white", bg=C_PRIMARY,
-                             activebackground=C_PRIMARY_L, activeforeground="white",
+                             fg="white", bg=PRIMARY,
+                             activebackground=PRIMARY_LIGHT, activeforeground="white",
                              relief="flat", padx=16, pady=4, bd=0,
                              command=self._save)
         save_btn.pack(side=tk.RIGHT, padx=(0, 8), pady=9)
 
         def _on_enter(e):
-            save_btn.config(bg=C_PRIMARY_L)
+            save_btn.config(bg=PRIMARY_LIGHT)
         def _on_leave(e):
-            save_btn.config(bg=C_PRIMARY)
+            save_btn.config(bg=PRIMARY)
         save_btn.bind("<Enter>", _on_enter)
         save_btn.bind("<Leave>", _on_leave)
 
@@ -329,7 +335,7 @@ class SettingsWindow:
             cap['active'] = True
             cap['original'] = entry.get().strip()
             # 进入捕捉模式：蓝字提示
-            entry.configure(foreground=C_PRIMARY)
+            entry.configure(foreground=PRIMARY)
             if cap['original']:
                 entry.selection_range(0, tk.END)
             else:
@@ -343,7 +349,7 @@ class SettingsWindow:
             if current in ('', '按下组合键…'):
                 entry.delete(0, tk.END)
                 entry.insert(0, cap['original'])
-            entry.configure(foreground=C_TEXT_SUB)
+            entry.configure(foreground=TEXT_SECONDARY)
 
         def _on_key(e):
             if not cap['active']:
@@ -395,27 +401,25 @@ class SettingsWindow:
     # ── 保存 ──
     def _save(self):
         try:
+            values = {}
             for key, entry in self._entries.items():
                 if isinstance(entry, tk.DoubleVar):
-                    config.set(key, round(entry.get(), 2))
+                    values[key] = round(entry.get(), 2)
                 else:
-                    config.set(key, entry.get().strip())
-            config.set("cpu_threads", int(self._cpu_threads_var.get()))
-            config.set("auto_copy", self._auto_copy_var.get())
-            config.set("show_toast", self._show_toast_var.get())
-            config.set("show_result_window", self._show_window_var.get())
-            config.set("close_action", self._close_action_var.get())
-            config.set("autostart", self._autostart_var.get())
-            config.set("start_minimized", self._start_minimized_var.get())
-            # 排版值反向映射
-            layout_display = self._layout_var.get()
-            layout_key = "auto"
-            for k, v in self._layout_options_map.items():
-                if v == layout_display:
-                    layout_key = k
-                    break
-            config.set("result_layout", layout_key)
-            config.save()
+                    values[key] = entry.get().strip()
+            values.update({
+                "cpu_threads": int(self._cpu_threads_var.get()),
+                "auto_copy": self._auto_copy_var.get(),
+                "show_toast": self._show_toast_var.get(),
+                "show_result_window": self._show_window_var.get(),
+                "close_action": self._close_action_var.get(),
+                "autostart": self._autostart_var.get(),
+                "start_minimized": self._start_minimized_var.get(),
+                # 排版值反向映射
+                "result_layout": self._layout_display_to_key(),
+            })
+            # 批量更新，仅写盘一次
+            config.update(values)
 
             # 开机自启：创建/删除启动目录快捷方式
             self._handle_autostart()
@@ -425,6 +429,14 @@ class SettingsWindow:
                 self._on_save_hotkey()
         finally:
             self._dialog.destroy()
+
+    def _layout_display_to_key(self):
+        """将排版下拉框的显示文本反向映射为配置键值"""
+        layout_display = self._layout_var.get()
+        for k, v in self._layout_options_map.items():
+            if v == layout_display:
+                return k
+        return "raw"
 
     def _handle_autostart(self):
         """根据开机自启设置，创建或移除启动快捷方式"""

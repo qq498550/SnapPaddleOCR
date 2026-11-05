@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.hooks import copy_metadata
 
-datas = [('F:\\VScode\\qq498550\\SnapPaddleOCR\\paddle_ocr_tool', 'paddle_ocr_tool'), ('F:\\VScode\\qq498550\\SnapPaddleOCR\\config.json', '.'), ('F:\\VScode\\qq498550\\SnapPaddleOCR\\.paddlex_cache', '.paddlex_cache')]
+datas = [('F:\\vscode\\qq498550\\SnapPaddleOCR\\paddle_ocr_tool', 'paddle_ocr_tool'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\config.json', '.'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\.paddlex_cache', '.paddlex_cache')]
 binaries = []
 hiddenimports = ['PIL', 'PIL.ImageTk', 'pystray', 'keyboard', 'win32api', 'win32con', 'win32gui', 'tkinter', 'tkinter.ttk', 'tkinter.font', 'tkinter.scrolledtext', 'cv2', 'shapely', 'shapely.geometry', 'pyclipper', 'numpy', 'numpy.core', 'pypdfium2', 'pypdfium2_raw', 'python_bidi', 'imagesize']
 datas += copy_metadata('shapely')
@@ -24,7 +24,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['F:\\VScode\\qq498550\\SnapPaddleOCR\\run.py'],
+    ['F:\\vscode\\qq498550\\SnapPaddleOCR\\run.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -54,7 +54,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['F:\\VScode\\qq498550\\SnapPaddleOCR\\paddle_ocr_tool\\ui\\main.ico'],
+    icon=['F:\\vscode\\qq498550\\SnapPaddleOCR\\paddle_ocr_tool\\ui\\main.ico'],
 )
 coll = COLLECT(
     exe,

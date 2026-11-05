@@ -202,11 +202,11 @@ def main():
     _print_header("启动 SnapPaddleOCR...")
     print()
 
-    tool_dir = os.path.join(SCRIPT_DIR, "paddle_ocr_tool")
-    sys.path.insert(0, tool_dir)
-    os.chdir(tool_dir)
+    # 以包身份导入，保证与 run.py 一致（同一模块实例、相对导入正常）
+    sys.path.insert(0, SCRIPT_DIR)
+    os.chdir(SCRIPT_DIR)
 
-    from main import main as run_app
+    from paddle_ocr_tool.main import main as run_app
     run_app()
 
 
