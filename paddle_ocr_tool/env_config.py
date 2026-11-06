@@ -14,21 +14,26 @@ def setup_paddle_env(cache_dir=None):
     Args:
         cache_dir: 模型缓存目录，默认使用 paths.CACHE_DIR
     """
-    # 强制关闭 OneDNN，避免 PIR 新执行器在部分 CPU 上报错
+    # 关闭 PIR 新执行器（与 OneDNN 组合在部分 CPU 上报错）
+    # 注意：FLAGS_use_mkldnn 由 OCR 引擎按用户配置在初始化时决定
     for key in (
-        "FLAGS_use_mkldnn",
         "FLAGS_enable_pir_api",
         "FLAGS_enable_pir_in_executor",
     ):
         os.environ.setdefault(key, "0")
 
-    # 禁用模型源检查
-    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    # 不跳过模型源连通性检查：首次运行需联网下载模型，
+    # 跳过检查会按固定顺序尝试源，在部分网络环境下全部失败
 
-    # 模型缓存目录
+    # 模型缓存目录（首次运行由 PaddleX 自动下载所选档位模型）
     if cache_dir is None:
         cache_dir = CACHE_DIR
-    os.environ.setdefault("PADDLE_PDX_CACHE_HOME", os.path.abspath(cache_dir))
+    cache_dir = os.path.abspath(cache_dir)
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+    except OSError:
+        pass
+    os.environ.setdefault("PADDLE_PDX_CACHE_HOME", cache_dir)
 
 
 def apply_thread_env():

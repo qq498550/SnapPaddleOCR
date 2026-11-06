@@ -2,9 +2,9 @@
 from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.hooks import copy_metadata
 
-datas = [('F:\\vscode\\qq498550\\SnapPaddleOCR\\paddle_ocr_tool', 'paddle_ocr_tool'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\config.json', '.'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\.paddlex_cache', '.paddlex_cache')]
+datas = [('F:\\vscode\\qq498550\\SnapPaddleOCR\\paddle_ocr_tool', 'paddle_ocr_tool'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\config.json', '.'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\.paddlex_cache\\official_models\\PP-OCRv4_mobile_det', '.paddlex_cache/official_models/PP-OCRv4_mobile_det'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\.paddlex_cache\\official_models\\PP-OCRv4_mobile_rec', '.paddlex_cache/official_models/PP-OCRv4_mobile_rec'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\.paddlex_cache\\official_models\\PP-LCNet_x1_0_textline_ori', '.paddlex_cache/official_models/PP-LCNet_x1_0_textline_ori')]
 binaries = []
-hiddenimports = ['PIL', 'PIL.ImageTk', 'pystray', 'keyboard', 'zxingcpp', 'win32api', 'win32con', 'win32gui', 'tkinter', 'tkinter.ttk', 'tkinter.font', 'tkinter.scrolledtext', 'cv2', 'shapely', 'shapely.geometry', 'pyclipper', 'numpy', 'numpy.core', 'pypdfium2', 'pypdfium2_raw', 'python_bidi', 'imagesize']
+hiddenimports = ['PIL', 'PIL.ImageTk', 'pystray', 'keyboard', 'zxingcpp', 'win32api', 'win32con', 'win32gui', 'tkinter', 'tkinter.ttk', 'tkinter.font', 'tkinter.scrolledtext', 'cv2', 'shapely', 'shapely.geometry', 'pyclipper', 'numpy', 'numpy.core', 'pypdfium2', 'pypdfium2_raw', 'python_bidi', 'imagesize', 'requests', 'requests.adapters', 'urllib3', 'idna', 'filelock', 'fsspec', 'huggingface_hub', 'tqdm']
 datas += copy_metadata('shapely')
 datas += copy_metadata('pyclipper')
 datas += copy_metadata('pypdfium2')
@@ -32,7 +32,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['hf_xet'],
     noarchive=False,
     optimize=0,
 )

@@ -18,8 +18,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # 设备与推理设置
     "device": "cpu",
-    "enable_mkldnn": False,
+    "enable_mkldnn": False,  # 当前 paddle 3.x 的 PIR 执行器不支持，必须关闭
     "cpu_threads": os.cpu_count() or 4,
+    # 模型档位：lite 轻量(PP-OCRv4_mobile，约 16MB) /
+    #          standard 标准(PP-OCRv6_medium，约 133MB)
+    # 模型不随安装包分发，首次使用某档位时自动联网下载
+    "model_profile": "lite",
 
     # 快捷键设置
     "screenshot_hotkey": "ctrl+shift+f",

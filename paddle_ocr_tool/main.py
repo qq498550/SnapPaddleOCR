@@ -11,7 +11,14 @@ from .code_scanner import CodeScanner, DetectedCode
 from .config import config
 from .env_config import setup_paddle_env, setup_dpi_awareness, ensure_sys_path
 from .hotkey import hotkey_manager
-from .ocr_engine import OCREngine
+from .ocr_engine import (
+    DEFAULT_PROFILE,
+    OCREngine,
+    has_packaged_models,
+    profile_label,
+    profile_size_mb,
+    sync_bundled_models,
+)
 from .screenshot import capture_screenshot_region
 from .utils import format_hotkey_for_display
 
@@ -20,10 +27,33 @@ setup_paddle_env()
 setup_dpi_awareness()
 ensure_sys_path()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
+def _setup_logging() -> None:
+    """日志：窗口模式无控制台，额外写入用户目录便于排查问题"""
+    handlers: List[logging.Handler] = []
+    fmt = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+    try:
+        from logging.handlers import RotatingFileHandler
+
+        from .paths import CACHE_DIR
+
+        log_dir = os.path.join(os.path.dirname(CACHE_DIR), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        fh = RotatingFileHandler(
+            os.path.join(log_dir, "app.log"),
+            maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        )
+        fh.setFormatter(fmt)
+        handlers.append(fh)
+    except Exception:
+        pass
+    if sys.stderr is not None:  # 开发模式/带控制台运行时同时输出
+        sh = logging.StreamHandler()
+        sh.setFormatter(fmt)
+        handlers.append(sh)
+    logging.basicConfig(level=logging.INFO, handlers=handlers or None)
+
+
+_setup_logging()
 logger = logging.getLogger("SnapPaddleOCR")
 
 # ── 单实例互斥锁 ──
@@ -63,6 +93,7 @@ class PaddleOCRTool:
     # 影响推理器构建的配置项：变化后需重建 OCR 引擎才能生效
     OCR_ENGINE_PARAM_KEYS = (
         "language", "ocr_version", "device", "enable_mkldnn", "cpu_threads",
+        "model_profile",
         "use_doc_orientation", "use_textline_orientation",
         "text_det_limit_side_len", "text_det_limit_type",
         "text_det_thresh", "text_det_box_thresh", "text_det_unclip_ratio",
@@ -71,6 +102,8 @@ class PaddleOCRTool:
 
     def __init__(self) -> None:
         self._ocr = OCREngine()
+        # 模型下载进度直接反映到状态栏
+        self._ocr.set_progress_callback(self._update_status)
         self._code_scanner = CodeScanner()
         self._main_window: Optional[Any] = None
         self._tray: Optional[Any] = None
@@ -94,17 +127,34 @@ class PaddleOCRTool:
         threading.Thread(target=self._init_tray_bg, daemon=True).start()
 
     def _init_ocr_bg(self) -> None:
-        """后台初始化 OCR 引擎"""
+        """后台初始化 OCR 引擎（内置模型同步；缺失档位自动联网下载）"""
+        profile = config.get("model_profile", DEFAULT_PROFILE)
+        missing = sync_bundled_models(
+            profile, bool(config.get("use_textline_orientation", False))
+        )
+        if missing:
+            first_run = not has_packaged_models()
+            tip = "首次运行" if first_run else "切换模型"
+            size = profile_size_mb(profile)
+            logger.info("%s：需要下载模型 %s", tip, missing)
+            self._update_status(
+                f"{tip}：正在下载{profile_label(profile)}模型"
+                f"（约 {size} MB），请稍候…"
+            )
+
         logger.info("正在初始化OCR引擎...")
         success = self._ocr.initialize(**config.get_all())
         if success:
             self._engine_params = self._current_engine_params()
             logger.info("OCR引擎初始化成功")
-            self._update_status("OCR引擎就绪")
+            self._update_status("模型下载完成，OCR引擎就绪" if missing else "OCR引擎就绪")
         else:
             err = self._ocr.error_message or "未知错误"
             logger.warning(f"OCR引擎初始化失败: {err}")
-            self._update_status(f"OCR引擎初始化失败: {err}")
+            if missing:
+                self._update_status(f"模型下载失败，请检查网络后重试: {err}")
+            else:
+                self._update_status(f"OCR引擎初始化失败: {err}")
         self._ocr_ready.set()
 
     def _current_engine_params(self) -> dict:
@@ -128,9 +178,20 @@ class PaddleOCRTool:
         ).start()
 
     def _reload_engine_bg(self, new_params: dict) -> None:
-        """后台重建 OCR 引擎（线程数 / 语言 / 阈值等修改后无需重启程序）"""
+        """后台重建 OCR 引擎（线程数 / 档位 / 阈值等修改后无需重启程序）"""
         with self._ocr_lock:
-            self._update_status("正在应用新的推理设置...")
+            profile = config.get("model_profile", DEFAULT_PROFILE)
+            missing = sync_bundled_models(
+                profile, bool(config.get("use_textline_orientation", False))
+            )
+            if missing:
+                self._update_status(
+                    f"正在下载{profile_label(profile)}模型"
+                    f"（约 {profile_size_mb(profile)} MB），请稍候…"
+                )
+            else:
+                self._update_status("正在应用新的推理设置...")
+
             if self._ocr.reload(**config.get_all()):
                 self._engine_params = new_params
                 logger.info("推理设置已生效")
@@ -138,7 +199,10 @@ class PaddleOCRTool:
             else:
                 err = self._ocr.error_message or "未知错误"
                 logger.warning("重建OCR引擎失败: %s", err)
-                self._update_status(f"推理设置应用失败: {err}")
+                if missing:
+                    self._update_status(f"模型下载失败，请检查网络后重试: {err}")
+                else:
+                    self._update_status(f"推理设置应用失败: {err}")
 
     def _init_hotkeys_bg(self) -> None:
         """后台注册全局热键，并启动锁屏监控"""

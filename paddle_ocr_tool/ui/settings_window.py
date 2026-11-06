@@ -15,6 +15,7 @@ from .theme import (
     TEXT_SECONDARY,
 )
 from ..config import config
+from ..ocr_engine import DEFAULT_PROFILE, MODEL_PROFILES
 
 _STARTUP_DIR = os.path.join(
     os.environ.get("APPDATA", ""),
@@ -191,6 +192,34 @@ class SettingsWindow:
                  text=f"  本机 {cpu_count} 个逻辑核（上限），保存后立即生效",
                  font=(self._font, 8),
                  fg=TEXT_SECONDARY, bg=SURFACE).pack(side=tk.LEFT)
+
+        # 识别模型档位
+        row_model = tk.Frame(card_infer, bg=SURFACE)
+        row_model.pack(fill=tk.X, pady=4)
+        tk.Label(row_model, text="识别模型", font=(self._font, 10),
+                 fg=TEXT, bg=SURFACE,
+                 width=16, anchor=tk.W).pack(side=tk.LEFT)
+        # 档位列表来自引擎注册表，显示各自首次下载体积
+        self._model_options_map = {
+            key: f"{conf['label']} · 约 {conf['size_mb']} MB"
+            for key, conf in MODEL_PROFILES.items()
+        }
+        cur_profile = config.get("model_profile", DEFAULT_PROFILE)
+        if cur_profile not in self._model_options_map:
+            cur_profile = DEFAULT_PROFILE
+        self._model_profile_var = tk.StringVar(
+            value=self._model_options_map[cur_profile])
+        mb = ttk.Combobox(row_model, textvariable=self._model_profile_var,
+                          values=list(self._model_options_map.values()),
+                          state="readonly", font=(self._font, 10), width=30)
+        mb.pack(side=tk.LEFT, padx=(4, 6))
+
+        row_model_tip = tk.Frame(card_infer, bg=SURFACE)
+        row_model_tip.pack(fill=tk.X, pady=(0, 2))
+        tk.Label(row_model_tip,
+                 text="默认轻量模型已内置，离线可用；选择其他档位首次需联网下载，之后离线切换",
+                 font=(self._font, 8), fg=TEXT_SECONDARY, bg=SURFACE,
+                 anchor=tk.W, justify=tk.LEFT).pack(side=tk.LEFT)
 
         # ── 输出设置 ──
         card3 = _card(scroll_frame, "📤  输出设置")
@@ -413,6 +442,7 @@ class SettingsWindow:
                     values[key] = entry.get().strip()
             values.update({
                 "cpu_threads": int(self._cpu_threads_var.get()),
+                "model_profile": self._model_display_to_key(),
                 "auto_copy": self._auto_copy_var.get(),
                 "show_toast": self._show_toast_var.get(),
                 "show_result_window": self._show_window_var.get(),
@@ -434,6 +464,14 @@ class SettingsWindow:
                 self._on_save_hotkey()
         finally:
             self._dialog.destroy()
+
+    def _model_display_to_key(self) -> str:
+        """将模型下拉框显示文本反向映射为配置键值"""
+        display = self._model_profile_var.get()
+        for k, v in self._model_options_map.items():
+            if v == display:
+                return k
+        return DEFAULT_PROFILE
 
     def _layout_display_to_key(self):
         """将排版下拉框的显示文本反向映射为配置键值"""
