@@ -97,7 +97,7 @@ dist/
    ```
 
 4. **输出位置**
-   - 安装包位于：`installer_output/SnapPaddleOCR_Setup_2.0.0.exe`
+   - 安装包位于：`installer_output/SnapPaddleOCR_Setup_2.1.0.exe`
 
 ### 简易分发方式
 

@@ -79,6 +79,8 @@ def build_pyinstaller():
         "--hidden-import", "PIL.ImageTk",
         "--hidden-import", "pystray",
         "--hidden-import", "keyboard",
+        # 二维码/条形码解码（懒加载，需显式声明）
+        "--hidden-import", "zxingcpp",
         "--hidden-import", "win32api",
         "--hidden-import", "win32con",
         "--hidden-import", "win32gui",

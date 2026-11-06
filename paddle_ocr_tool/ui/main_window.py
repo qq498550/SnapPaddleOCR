@@ -259,11 +259,19 @@ class MainWindow:
 
     # ── 对外公开接口（线程安全） ──
 
-    def add_result(self, text: str, timestamp: Optional[str] = None) -> None:
-        """添加一条识别记录卡片（自动滚动到底部，超过上限时移除最旧记录）"""
+    def add_result(self, text: str, timestamp: Optional[str] = None,
+                   tag: Optional[str] = None) -> None:
+        """添加一条识别记录卡片（自动滚动到底部，超过上限时移除最旧记录）
+
+        Args:
+            text: 卡片正文
+            timestamp: 时间戳文本
+            tag: 可选来源标签（如 "扫码·QRCode"）
+        """
         if not self._result_panel:
             return
-        self._root.after(0, lambda: self._result_panel.add(text, timestamp))
+        self._root.after(
+            0, lambda: self._result_panel.add(text, timestamp, tag))
 
     def show_toast(self, text: str, duration: int = 4000) -> None:
         """屏幕下方半透明提示浮窗"""

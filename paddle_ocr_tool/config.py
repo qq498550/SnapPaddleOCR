@@ -42,6 +42,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "show_result_window": True,
     "result_layout": "raw",  # raw 逐段换行 / none 不换行
 
+    # 扫码设置
+    "scan_codes": True,  # 截图时自动解析二维码 / 条形码并复制内容
+
     # 界面设置
     "start_minimized": False,
     "autostart": False,
@@ -68,6 +71,27 @@ class Config:
                 self.save()
         except Exception:
             self._config = DEFAULT_CONFIG.copy()
+            self.save()
+            return
+        self._sanitize()
+
+    def _sanitize(self) -> None:
+        """校正非法配置值（线程数超过本机逻辑核数会导致超配变慢）"""
+        logical = os.cpu_count() or 4
+        raw = self._config.get("cpu_threads")
+        if raw is None:
+            return
+        try:
+            threads = int(raw)
+        except (TypeError, ValueError):
+            threads = logical
+        threads = max(1, min(threads, logical))
+        if threads != raw:
+            logger.warning(
+                "配置中的 cpu_threads=%s 非法/超出本机逻辑核数 %s，已修正为 %s",
+                raw, logical, threads,
+            )
+            self._config["cpu_threads"] = threads
             self.save()
 
     def save(self) -> None:

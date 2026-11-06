@@ -52,10 +52,17 @@ class ResultPanel:
         self._cards.clear()
         self._seq = 0
 
-    def add(self, text: str, timestamp: Optional[str] = None) -> None:
-        """追加一条识别记录卡片"""
+    def add(self, text: str, timestamp: Optional[str] = None,
+            tag: Optional[str] = None) -> None:
+        """追加一条识别记录卡片
+
+        Args:
+            text: 卡片正文
+            timestamp: 时间戳文本
+            tag: 可选来源标签（如 "扫码·QRCode"），默认显示序号
+        """
         self._seq += 1
-        self._create_card(text, timestamp)
+        self._create_card(text, timestamp, tag)
         self._evict_oldest_if_needed()
         # 滚动到底部
         self._root.after(50, lambda: self._canvas.yview_moveto(1.0))
@@ -72,7 +79,8 @@ class ResultPanel:
             oldest = self._cards.pop(0)
             oldest.destroy()
 
-    def _create_card(self, text: str, timestamp: Optional[str]) -> None:
+    def _create_card(self, text: str, timestamp: Optional[str],
+                     tag: Optional[str] = None) -> None:
         cnt = self._seq
 
         # ── 卡片容器 ──
@@ -90,9 +98,15 @@ class ResultPanel:
         header = tk.Frame(card, bg=theme.SURFACE)
         header.pack(fill=tk.X)
 
-        tk.Label(header, text=f"#{cnt}",
-                 font=(self._font_family, 8),
-                 fg=theme.TEXT_SECONDARY, bg=theme.SURFACE).pack(side=tk.LEFT)
+        if tag:
+            # 扫码等特殊来源：用标签替代序号
+            tk.Label(header, text=f"[{tag}]",
+                     font=(self._font_family, 8, "bold"),
+                     fg=theme.PRIMARY, bg=theme.SURFACE).pack(side=tk.LEFT)
+        else:
+            tk.Label(header, text=f"#{cnt}",
+                     font=(self._font_family, 8),
+                     fg=theme.TEXT_SECONDARY, bg=theme.SURFACE).pack(side=tk.LEFT)
 
         tk.Label(header,
                  text=timestamp or "",

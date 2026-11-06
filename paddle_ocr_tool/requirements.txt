@@ -6,6 +6,9 @@ paddleocr>=3.0.0
 paddlepaddle>=3.0.0
 Pillow>=10.0.0
 
+# 二维码 / 条形码解析（缺失时自动退回 OpenCV，仅支持二维码）
+zxing-cpp>=2.2.0
+
 # Windows 平台增强功能（可选但推荐）
 keyboard>=0.13.5; sys_platform == 'win32'
 pystray>=0.19.5; sys_platform == 'win32'

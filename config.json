@@ -1,10 +1,10 @@
 {
   "language": "ch",
-  "app_version": "2.0.0",
+  "app_version": "2.1.0",
   "ocr_version": "PP-OCRv6",
   "device": "cpu",
   "enable_mkldnn": false,
-  "cpu_threads": 24,
+  "cpu_threads": 8,
   "screenshot_hotkey": "ctrl+shift+f",
   "clipboard_hotkey": "ctrl+shift+g",
   "quick_ocr_hotkey": "ctrl+shift+d",
@@ -17,16 +17,11 @@
   "text_det_unclip_ratio": 1.5,
   "text_rec_score_thresh": 0.5,
   "auto_copy": true,
-  "auto_paste": false,
+  "show_toast": true,
   "show_result_window": true,
-  "result_format": "text",
-  "save_to_file": false,
-  "save_directory": "",
+  "result_layout": "raw",
+  "scan_codes": true,
   "start_minimized": false,
   "autostart": false,
-  "minimize_to_tray": true,
-  "language_ui": "zh_CN",
-  "show_toast": true,
-  "close_action": "minimize",
-  "result_layout": "raw"
+  "close_action": "minimize"
 }

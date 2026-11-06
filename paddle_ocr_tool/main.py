@@ -4,9 +4,10 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, List, Optional
 
 from . import __version__
+from .code_scanner import CodeScanner, DetectedCode
 from .config import config
 from .env_config import setup_paddle_env, setup_dpi_awareness, ensure_sys_path
 from .hotkey import hotkey_manager
@@ -59,14 +60,26 @@ class PaddleOCRTool:
     # OCR 触发防抖间隔（秒）：防止快速连续触发（如连按快捷键）导致多次 OCR 叠加
     OCR_DEBOUNCE_SEC = 0.8
 
+    # 影响推理器构建的配置项：变化后需重建 OCR 引擎才能生效
+    OCR_ENGINE_PARAM_KEYS = (
+        "language", "ocr_version", "device", "enable_mkldnn", "cpu_threads",
+        "use_doc_orientation", "use_textline_orientation",
+        "text_det_limit_side_len", "text_det_limit_type",
+        "text_det_thresh", "text_det_box_thresh", "text_det_unclip_ratio",
+        "text_rec_score_thresh",
+    )
+
     def __init__(self) -> None:
         self._ocr = OCREngine()
+        self._code_scanner = CodeScanner()
         self._main_window: Optional[Any] = None
         self._tray: Optional[Any] = None
         self._running = True
         self._ocr_lock = threading.Lock()
         self._ocr_ready = threading.Event()
         self._last_ocr_time = 0.0
+        # 当前引擎实际使用的推理参数（用于判断设置变更后是否需要重载）
+        self._engine_params: dict = {}
 
     # ── 生命周期 ──
 
@@ -85,6 +98,7 @@ class PaddleOCRTool:
         logger.info("正在初始化OCR引擎...")
         success = self._ocr.initialize(**config.get_all())
         if success:
+            self._engine_params = self._current_engine_params()
             logger.info("OCR引擎初始化成功")
             self._update_status("OCR引擎就绪")
         else:
@@ -92,6 +106,39 @@ class PaddleOCRTool:
             logger.warning(f"OCR引擎初始化失败: {err}")
             self._update_status(f"OCR引擎初始化失败: {err}")
         self._ocr_ready.set()
+
+    def _current_engine_params(self) -> dict:
+        """读取当前配置中影响推理器的参数快照"""
+        return {k: config.get(k) for k in self.OCR_ENGINE_PARAM_KEYS}
+
+    def _on_settings_saved(self) -> None:
+        """设置保存回调：刷新热键，必要时重建 OCR 引擎使推理参数立即生效"""
+        self._refresh_hotkeys()
+        new_params = self._current_engine_params()
+        if new_params == self._engine_params:
+            return
+        changed = {
+            k: (self._engine_params.get(k), v)
+            for k, v in new_params.items()
+            if self._engine_params.get(k) != v
+        }
+        logger.info("推理参数已变更，准备重建 OCR 引擎: %s", changed)
+        threading.Thread(
+            target=self._reload_engine_bg, args=(new_params,), daemon=True
+        ).start()
+
+    def _reload_engine_bg(self, new_params: dict) -> None:
+        """后台重建 OCR 引擎（线程数 / 语言 / 阈值等修改后无需重启程序）"""
+        with self._ocr_lock:
+            self._update_status("正在应用新的推理设置...")
+            if self._ocr.reload(**config.get_all()):
+                self._engine_params = new_params
+                logger.info("推理设置已生效")
+                self._update_status("推理设置已生效")
+            else:
+                err = self._ocr.error_message or "未知错误"
+                logger.warning("重建OCR引擎失败: %s", err)
+                self._update_status(f"推理设置应用失败: {err}")
 
     def _init_hotkeys_bg(self) -> None:
         """后台注册全局热键，并启动锁屏监控"""
@@ -205,7 +252,7 @@ class PaddleOCRTool:
                 config.get("screenshot_hotkey")),
             clipboard_hotkey_str=format_hotkey_for_display(
                 config.get("clipboard_hotkey")),
-            on_save_settings=self._refresh_hotkeys,
+            on_save_settings=self._on_settings_saved,
         )
 
         self._main_window.set_title(f"SnapPaddleOCR v{__version__}")
@@ -270,6 +317,9 @@ class PaddleOCRTool:
                 if img is None:
                     self._update_status("已取消截图")
                     return
+                # 优先扫码：命中二维码/条形码则直接解析并复制，不再做文字识别
+                if self._try_scan_codes(img):
+                    return
                 self._update_status("正在识别...")
                 result = self._ocr.recognize(img)
                 self._handle_result(result)
@@ -300,6 +350,9 @@ class PaddleOCRTool:
                 img = capture_screenshot_region(main_window=self._main_window)
                 if img is None:
                     return
+                # 优先扫码：命中二维码/条形码则直接解析并复制
+                if self._try_scan_codes(img):
+                    return
                 result = self._ocr.recognize(img)
                 if result["code"] == 100:
                     items = [d for d in result["data"] if d.get("text", "").strip()]
@@ -319,6 +372,47 @@ class PaddleOCRTool:
                     self._notify("OCR失败", result["data"])
             except Exception as e:
                 logger.exception("快速OCR失败")
+
+    # ── 扫码 ──
+
+    def _try_scan_codes(self, image: Any) -> bool:
+        """尝试解析图片中的二维码/条形码
+
+        Args:
+            image: 截图得到的 PIL.Image
+
+        Returns:
+            True 表示已成功解析并处理（调用方应跳过文字识别），
+            False 表示未发现条码，继续走 OCR 流程
+        """
+        if not config.get("scan_codes", True):
+            return False
+
+        codes = self._code_scanner.scan(image)
+        if not codes:
+            return False
+
+        self._handle_codes(codes)
+        return True
+
+    def _handle_codes(self, codes: List[DetectedCode]) -> None:
+        """处理扫码结果：复制到剪贴板 + Toast 提示 + 记录到结果列表"""
+        text = "\n".join(c.text for c in codes)
+        # 码制名称去重，如 "QRCode"、"QRCode、Code128"
+        formats = "、".join(dict.fromkeys(c.format for c in codes))
+
+        self._copy_to_clipboard(text)
+        self._update_status(f"已识别 {formats}，内容已复制到剪贴板")
+        self._notify("扫码完成", f"已解析 {formats}")
+        if self._main_window and config.get("show_toast", True):
+            self._main_window.show_toast(text, duration=2500)
+        if self._main_window:
+            label = "扫码"
+            self._run_in_main(
+                lambda t=text, f=formats: self._main_window.add_result(
+                    t, time.strftime('%H:%M:%S'), tag=f"{label}·{f}"
+                )
+            )
 
     def _handle_result(self, result: dict) -> None:
         """处理 OCR 结果：展示 / 复制 / 通知"""

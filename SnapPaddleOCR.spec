@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import copy_metadata
 
 datas = [('F:\\vscode\\qq498550\\SnapPaddleOCR\\paddle_ocr_tool', 'paddle_ocr_tool'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\config.json', '.'), ('F:\\vscode\\qq498550\\SnapPaddleOCR\\.paddlex_cache', '.paddlex_cache')]
 binaries = []
-hiddenimports = ['PIL', 'PIL.ImageTk', 'pystray', 'keyboard', 'win32api', 'win32con', 'win32gui', 'tkinter', 'tkinter.ttk', 'tkinter.font', 'tkinter.scrolledtext', 'cv2', 'shapely', 'shapely.geometry', 'pyclipper', 'numpy', 'numpy.core', 'pypdfium2', 'pypdfium2_raw', 'python_bidi', 'imagesize']
+hiddenimports = ['PIL', 'PIL.ImageTk', 'pystray', 'keyboard', 'zxingcpp', 'win32api', 'win32con', 'win32gui', 'tkinter', 'tkinter.ttk', 'tkinter.font', 'tkinter.scrolledtext', 'cv2', 'shapely', 'shapely.geometry', 'pyclipper', 'numpy', 'numpy.core', 'pypdfium2', 'pypdfium2_raw', 'python_bidi', 'imagesize']
 datas += copy_metadata('shapely')
 datas += copy_metadata('pyclipper')
 datas += copy_metadata('pypdfium2')

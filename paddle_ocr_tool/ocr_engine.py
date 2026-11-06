@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
-from .env_config import setup_paddle_env
+from .env_config import apply_thread_env, setup_paddle_env
 from .paths import CACHE_DIR
 
 setup_paddle_env()
@@ -23,6 +23,25 @@ OcrResult = Dict[str, Any]
 
 # PaddleOCR predict() 支持的输入类型
 PredictInput = Union[str, np.ndarray]
+
+
+def logical_cpu_count() -> int:
+    """本机逻辑处理器核心数"""
+    return os.cpu_count() or 4
+
+
+def clamp_cpu_threads(value: Any) -> int:
+    """将 CPU 线程数限制在 [1, 逻辑核数] 区间
+
+    线程数超过物理可调度核心会导致 OpenMP 线程自旋争抢，
+    实测超配（24 线程 / 16 核）反而使识别慢 3 倍以上。
+    """
+    logical = logical_cpu_count()
+    try:
+        threads = int(value)
+    except (TypeError, ValueError):
+        threads = logical
+    return max(1, min(threads, logical))
 
 
 def _is_corrupted_model_cache_error(exc: Exception) -> bool:
@@ -63,7 +82,18 @@ class OCREngine:
 
     @staticmethod
     def _build_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        """将用户配置映射为 PaddleOCR 构造参数"""
+        """将用户配置映射为 PaddleOCR 构造参数
+
+        cpu_threads 会被 clamp 到 [1, 逻辑核数]：超配会导致线程
+        自旋争抢，CPU 占用反而上不去且识别显著变慢。
+        """
+        raw_threads = kwargs.get("cpu_threads", logical_cpu_count())
+        threads = clamp_cpu_threads(raw_threads)
+        if threads != raw_threads:
+            logger.warning(
+                "cpu_threads=%s 超出本机逻辑核数 %s，已自动调整为 %s",
+                raw_threads, logical_cpu_count(), threads,
+            )
         return {
             "lang": kwargs.get("language", "ch"),
             "ocr_version": kwargs.get("ocr_version", "PP-OCRv6"),
@@ -85,15 +115,19 @@ class OCREngine:
             # ── CPU 模式：必须关闭 MKLDNN ──
             "device": kwargs.get("device", "cpu"),
             "enable_mkldnn": kwargs.get("enable_mkldnn", False),
-            "cpu_threads": kwargs.get("cpu_threads", 4),
+            "cpu_threads": threads,
         }
 
     def initialize(self, **kwargs: Any) -> bool:
         """初始化 OCR 引擎（CPU 模式），若模型缓存损坏则自动清理重试"""
         try:
-            # 重要：再次确保 env 在 paddle 导入前设置
+            params = self._build_params(kwargs)
+
+            # 重要：必须在 paddle 首次导入前设置环境
             os.environ["FLAGS_use_mkldnn"] = "0"
             os.environ["FLAGS_enable_pir_api"] = "0"
+            # OMP 固定 1 线程：CPU 并行统一由 cpu_threads 控制，避免双线程池争抢
+            apply_thread_env()
 
             from paddleocr import PaddleOCR
 
@@ -105,7 +139,6 @@ class OCREngine:
             except Exception:
                 pass
 
-            params = self._build_params(kwargs)
             logger.info(
                 "OCR 运行配置: device=%s, enable_mkldnn=%s, cpu_threads=%s",
                 params["device"],
@@ -212,6 +245,11 @@ class OCREngine:
                         }
                     )
         return ocr_data
+
+    def reload(self, **kwargs: Any) -> bool:
+        """按新参数重建引擎（用于设置变更后即时生效，无需重启程序）"""
+        self.close()
+        return self.initialize(**kwargs)
 
     def close(self) -> None:
         """关闭引擎释放资源（模型与推理器引用置空并触发 GC 回收）"""

@@ -187,7 +187,8 @@ class SettingsWindow:
                           values=thread_vals, state="readonly",
                           font=(self._font, 10), width=6)
         cb.pack(side=tk.LEFT, padx=(4, 6))
-        tk.Label(row_infer, text=f"  共 {cpu_count} 核，数值越大识别越快",
+        tk.Label(row_infer,
+                 text=f"  本机 {cpu_count} 个逻辑核（上限），保存后立即生效",
                  font=(self._font, 8),
                  fg=TEXT_SECONDARY, bg=SURFACE).pack(side=tk.LEFT)
 
@@ -202,6 +203,9 @@ class SettingsWindow:
         self._show_window_var = tk.BooleanVar(value=config.get("show_result_window", True))
         ttk.Checkbutton(card3, text="识别后自动显示结果窗口",
                         variable=self._show_window_var).pack(anchor=tk.W, pady=2)
+        self._scan_codes_var = tk.BooleanVar(value=config.get("scan_codes", True))
+        ttk.Checkbutton(card3, text="截图时自动解析二维码/条形码并复制内容",
+                        variable=self._scan_codes_var).pack(anchor=tk.W, pady=2)
 
         # ── 界面设置 ──
         card4 = _card(scroll_frame, "🖥  界面设置")
@@ -412,6 +416,7 @@ class SettingsWindow:
                 "auto_copy": self._auto_copy_var.get(),
                 "show_toast": self._show_toast_var.get(),
                 "show_result_window": self._show_window_var.get(),
+                "scan_codes": self._scan_codes_var.get(),
                 "close_action": self._close_action_var.get(),
                 "autostart": self._autostart_var.get(),
                 "start_minimized": self._start_minimized_var.get(),
