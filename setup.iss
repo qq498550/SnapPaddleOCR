@@ -27,10 +27,18 @@ WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
+; 最低系统版本：Windows 10（Inno Setup 6 用 MinVersion 替代旧版 Win32MajorVersion 检查）
+MinVersion=10.0
+; 安装包可执行文件版本信息
+VersionInfoVersion={#MyAppVersion}
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoDescription={#MyAppName} 安装程序
+VersionInfoProductName={#MyAppName}
+VersionInfoProductVersion={#MyAppVersion}
 
 ; 语言设置
-Languages:
-Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl"
+[Languages]
+Name: "chinesesimplified"; MessagesFile: "compiler_files\ChineseSimplified.isl"
 
 ; 安装步骤
 [Tasks]
@@ -53,21 +61,7 @@ Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#MyAppName}"; Fil
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-// 自定义安装逻辑
-function InitializeSetup(): Boolean;
-var
-  ResultCode: Integer;
-begin
-  // 检查操作系统版本（需要 Windows 10 或更高）
-  if (Win32MajorVersion < 10) then
-  begin
-    MsgBox('此应用程序需要 Windows 10 或更高版本。', mbError, MB_OK);
-    Result := False;
-  end
-  else
-    Result := True;
-end;
-
+// 自定义安装逻辑（系统版本检查由 [Setup] 的 MinVersion 完成）
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
