@@ -113,6 +113,10 @@ class PaddleOCRTool:
         self._last_ocr_time = 0.0
         # 当前引擎实际使用的推理参数（用于判断设置变更后是否需要重载）
         self._engine_params: dict = {}
+        # OCR 任务互斥：同一时刻只允许一个识别任务（含等待用户框选），
+        # 避免连按热键时任务在锁上排队、各自持有整屏截图导致内存堆积
+        self._ocr_task_busy = False
+        self._ocr_task_lock = threading.Lock()
 
     # ── 生命周期 ──
 
@@ -269,11 +273,25 @@ class PaddleOCRTool:
 
     @staticmethod
     def _is_session_locked() -> bool:
-        """检测当前会话是否处于锁屏状态（OpenInputDesktop 锁屏时返回 NULL）"""
+        """检测当前会话是否处于锁屏状态（OpenInputDesktop 锁屏时返回 NULL）
+
+        必须显式声明返回值为 64 位句柄：ctypes 默认按 32 位 int 解析，
+        在 64 位系统上句柄被截断会导致 CloseDesktop 失败、桌面句柄泄漏
+        （本函数每 3 秒调用一次，长时间运行会持续累积内核句柄）。
+        """
         import ctypes
-        hdesk = ctypes.windll.user32.OpenInputDesktop(0, False, 0)
-        if hdesk != 0:
-            ctypes.windll.user32.CloseDesktop(hdesk)
+
+        user32 = ctypes.windll.user32
+        user32.OpenInputDesktop.restype = ctypes.c_void_p
+        user32.OpenInputDesktop.argtypes = [
+            ctypes.c_ulong, ctypes.c_bool, ctypes.c_ulong,
+        ]
+        user32.CloseDesktop.argtypes = [ctypes.c_void_p]
+        user32.CloseDesktop.restype = ctypes.c_bool
+
+        hdesk = user32.OpenInputDesktop(0, False, 0)
+        if hdesk:
+            user32.CloseDesktop(hdesk)
             return False
         return True
 
@@ -338,10 +356,28 @@ class PaddleOCRTool:
             self._main_window.schedule(func, *args, **kwargs)
 
     def _spawn_ocr_task(self, task: Callable[[], None]) -> None:
-        """防抖检查通过后，在一次性后台线程中执行 OCR 任务"""
+        """防抖检查通过后，在一次性后台线程中执行 OCR 任务
+
+        同一时刻只允许一个任务在跑：截图框选可能等待用户上百秒，
+        若允许排队，每次按键都会新建线程并抓取整屏图（4K 约 25MB），
+        任务堆积会造成内存陡增。
+        """
         if not self._debounce_ocr():
             return
-        threading.Thread(target=task, daemon=True).start()
+        with self._ocr_task_lock:
+            if self._ocr_task_busy:
+                self._update_status("正在识别中，请稍候…")
+                return
+            self._ocr_task_busy = True
+
+        def _runner() -> None:
+            try:
+                task()
+            finally:
+                with self._ocr_task_lock:
+                    self._ocr_task_busy = False
+
+        threading.Thread(target=_runner, daemon=True, name="ocr-task").start()
 
     def _debounce_ocr(self) -> bool:
         """热键防抖：短时间内重复触发则忽略"""
@@ -376,6 +412,7 @@ class PaddleOCRTool:
     def _do_screenshot_ocr(self) -> None:
         with self._ocr_lock:
             self._update_status("正在截图...")
+            img = None
             try:
                 img = capture_screenshot_region(main_window=self._main_window)
                 if img is None:
@@ -390,13 +427,24 @@ class PaddleOCRTool:
             except Exception as e:
                 logger.exception("截图OCR失败")
                 self._update_status(f"截图OCR失败: {e}")
+            finally:
+                # 及时释放整屏截图（4K 约 25MB），降低峰值内存
+                if img is not None:
+                    try:
+                        img.close()
+                    except Exception:
+                        pass
 
     def _do_clipboard_ocr(self) -> None:
         with self._ocr_lock:
+            img = None
             try:
                 from PIL import ImageGrab
+                from PIL.Image import Image as PILImage
                 self._update_status("正在读取剪贴板...")
-                img = ImageGrab.grabclipboard()
+                clipboard_data = ImageGrab.grabclipboard()
+                if isinstance(clipboard_data, PILImage):
+                    img = clipboard_data
                 if img is None:
                     self._update_status("剪贴板中没有图片")
                     return
@@ -406,10 +454,17 @@ class PaddleOCRTool:
             except Exception as e:
                 logger.exception("剪贴板OCR失败")
                 self._update_status(f"剪贴板OCR失败: {e}")
+            finally:
+                if img is not None:
+                    try:
+                        img.close()
+                    except Exception:
+                        pass
 
     def _do_quick_ocr(self) -> None:
         """快速 OCR：不弹结果窗，直接复制 + Toast 轻提示"""
         with self._ocr_lock:
+            img = None
             try:
                 img = capture_screenshot_region(main_window=self._main_window)
                 if img is None:
@@ -436,6 +491,12 @@ class PaddleOCRTool:
                     self._notify("OCR失败", result["data"])
             except Exception as e:
                 logger.exception("快速OCR失败")
+            finally:
+                if img is not None:
+                    try:
+                        img.close()
+                    except Exception:
+                        pass
 
     # ── 扫码 ──
 
