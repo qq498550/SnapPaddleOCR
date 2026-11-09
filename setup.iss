@@ -3,7 +3,7 @@
 
 ; 版本号与 paddle_ocr_tool/__init__.py 中的 __version__ 保持同步
 #define MyAppName "SnapPaddleOCR"
-#define MyAppVersion "2.2.0"
+#define MyAppVersion "2.2.1"
 #define MyAppPublisher "SnapPaddleOCR Team"
 #define MyAppExeName "SnapPaddleOCR.exe"
 
