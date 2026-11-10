@@ -212,6 +212,8 @@ class PaddleOCRTool:
         """后台注册全局热键，并启动锁屏监控"""
         self._ocr_ready.wait(timeout=30)
         if hotkey_manager.init():
+            # 提供绑定快照，供处理线程死亡时的紧急重建恢复热键
+            hotkey_manager.set_binding_provider(self._hotkey_bindings)
             self._register_hotkeys()
             logger.info("全局热键已注册")
         # 启动系统锁屏/解锁监控，自动恢复失效的全局热键
@@ -240,7 +242,7 @@ class PaddleOCRTool:
         def _monitor_loop() -> None:
             was_locked = False
             last_health_check = time.time()
-            health_check_interval = 300  # 5 分钟健康检查间隔
+            health_check_interval = 120  # 2 分钟探测式健康检查
 
             while self._running:
                 try:
@@ -255,16 +257,20 @@ class PaddleOCRTool:
                     was_locked = is_locked
 
                     # 周期性健康检查：Windows 可能在锁屏之外的其他场景
-                    # 静默移除低级键盘钩子（显示模式切换/UAC/全屏应用等）
+                    # 静默移除低级键盘钩子（显示模式切换/UAC/全屏应用/回调
+                    # 超时等），且没有任何查询接口。通过注入一对保留虚拟键
+                    # VK 0x07 主动探测钩子是否仍在接收事件，同时检查处理
+                    # 线程队列是否积压；任何一项失效都会自动恢复。
+                    # 锁屏时跳过探测（Secure Desktop 下注入必然失败，会误报）。
                     now = time.time()
                     if not is_locked and (now - last_health_check >= health_check_interval):
                         last_health_check = now
-                        if hotkey_manager.has_callbacks and not hotkey_manager.is_alive():
-                            logger.warning("检测到键盘钩子已失效，正在自动恢复...")
-                            hotkey_manager.reconnect()
+                        if hotkey_manager.has_callbacks:
+                            if not hotkey_manager.ensure_alive():
+                                logger.warning("热键健康检查未通过，已尝试自动恢复")
 
                 except Exception:
-                    pass
+                    logger.exception("会话监控循环异常（已忽略）")
                 time.sleep(3)  # 每 3 秒检测一次
 
         threading.Thread(target=_monitor_loop, daemon=True,
