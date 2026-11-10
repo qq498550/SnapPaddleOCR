@@ -1,11 +1,22 @@
 # PaddleOCR 截图文字识别工具
 # 全局热键模块 - 注册系统和全局快捷键
+#
+# 后端架构（参考 Umi-OCR 的触发逻辑）：
+#   主后端  RegisterHotKey + WM_HOTKEY 消息循环
+#           热键由操作系统内核热键表管理，不占键盘钩子、不存在
+#           "回调超时被系统移除"问题，锁屏/解锁/显示切换后自动恢复，
+#           无需任何探测注入（注入保留虚拟键会在 LTSC 等精简系统上
+#           触发 ms-gamingoverlay 弹窗）。
+#   回退后端 keyboard 库低级键盘钩子（经消息泵补丁加固）
+#           仅当某热键 RegisterHotKey 失败（被其它程序占用）或
+#           键名无法解析时，按单个热键回退。
 
 import ctypes
 import logging
+import queue
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger("SnapPaddleOCR.Hotkey")
 
@@ -22,61 +33,239 @@ _QUEUE_BACKLOG_LIMIT = 30
 _EMERGENCY_MAX_PER_DAY = 2
 _EMERGENCY_COOLDOWN = 86400.0
 
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-# ── SendInput 结构（用于钩子活性探测：注入一对保留虚拟键 VK 0x07）──
-class _KEYBDINPUT(ctypes.Structure):
-    _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
-                ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
-                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+# ── RegisterHotKey 后端常量 ──
+WM_HOTKEY = 0x0312
+WM_QUIT = 0x0012
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+MOD_NOREPEAT = 0x4000  # Win7+：按住不放不重复触发
+ERROR_HOTKEY_ALREADY_REGISTERED = 1409
 
 
-class _MOUSEINPUT(ctypes.Structure):
-    _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
-                ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+class _MSG(ctypes.Structure):
+    _fields_ = [("hwnd", ctypes.c_void_p), ("message", ctypes.c_uint),
+                ("wParam", ctypes.c_void_p), ("lParam", ctypes.c_void_p),
                 ("time", ctypes.c_ulong),
-                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+                ("pt_x", ctypes.c_long), ("pt_y", ctypes.c_long)]
 
 
-class _HARDWAREINPUT(ctypes.Structure):
-    _fields_ = [("uMsg", ctypes.c_ulong), ("wParamL", ctypes.c_ushort),
-                ("wParamH", ctypes.c_ushort)]
+# ── 热键字符串解析（"ctrl+alt+s" → MOD_CONTROL|MOD_ALT + VK 'S'）──
+_MOD_ALIASES = {
+    "ctrl": MOD_CONTROL, "control": MOD_CONTROL, "ctl": MOD_CONTROL,
+    "alt": MOD_ALT,
+    "shift": MOD_SHIFT,
+    "win": MOD_WIN, "windows": MOD_WIN, "super": MOD_WIN, "meta": MOD_WIN,
+}
+_VK_TABLE = {
+    "esc": 0x1B, "escape": 0x1B, "tab": 0x09, "enter": 0x0D, "return": 0x0D,
+    "space": 0x20, "spacebar": 0x20, "backspace": 0x08, "bksp": 0x08,
+    "delete": 0x2E, "del": 0x2E, "insert": 0x2D, "ins": 0x2D,
+    "home": 0x24, "end": 0x23, "pageup": 0x21, "pgup": 0x21,
+    "pagedown": 0x22, "pgdn": 0x22,
+    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+    "printscreen": 0x2C, "prtsc": 0x2C, "snapshot": 0x2C,
+    "pause": 0x13, "break": 0x13, "capslock": 0x14, "numlock": 0x90,
+    "scrolllock": 0x91,
+    "apps": 0x5D, "menu": 0x5D,
+    "add": 0x6B, "subtract": 0x6D, "multiply": 0x6A, "divide": 0x6F,
+    "decimal": 0x6E,
+    "mediaplaypause": 0xB3, "medianexttrack": 0xB0, "mediaprevtrack": 0xB1,
+    "mediastop": 0xB2, "volumemute": 0xAD, "volumeup": 0xAF,
+    "volumedown": 0xAE,
+}
+for _i in range(10):
+    _VK_TABLE[f"numpad{_i}"] = 0x60 + _i
 
 
-class _INPUT_UNION(ctypes.Union):
-    _fields_ = [("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT),
-                ("hi", _HARDWAREINPUT)]
+def _parse_hotkey(hotkey: str) -> Optional[Tuple[int, int]]:
+    """解析热键字符串为 (modifiers, virtual_key)；无法解析返回 None"""
+    mods = 0
+    vk = None
+    for part in hotkey.lower().replace(" ", "").split("+"):
+        if not part:
+            continue
+        if part in _MOD_ALIASES:
+            mods |= _MOD_ALIASES[part]
+        elif part in _VK_TABLE:
+            vk = _VK_TABLE[part]
+        elif part.startswith("f") and part[1:].isdigit() \
+                and 1 <= int(part[1:]) <= 24:
+            vk = 0x6F + int(part[1:])  # F1=0x70
+        elif len(part) == 1:
+            ch = part.upper()
+            if "A" <= ch <= "Z" or "0" <= ch <= "9":
+                vk = ord(ch)
+            else:
+                # 标点符号：经 VkKeyScanW 转换（忽略其 shift 状态位）
+                _user32.VkKeyScanW.restype = ctypes.c_short
+                _user32.VkKeyScanW.argtypes = [ctypes.c_wchar]
+                scanned = _user32.VkKeyScanW(part)
+                if scanned == -1:
+                    return None
+                vk = scanned & 0xFF
+        else:
+            return None
+    if vk is None:
+        return None
+    return (mods | MOD_NOREPEAT, vk)
 
 
-class _INPUT(ctypes.Structure):
-    _fields_ = [("type", ctypes.c_ulong), ("u", _INPUT_UNION)]
+class _RegisterHotkeyBackend:
+    """RegisterHotKey 主后端：专用守护线程 + WM_HOTKEY 消息循环
 
+    WM_HOTKEY 投递到调用 RegisterHotKey 的线程，因此注册/注销命令
+    经命令队列在热键线程内执行；回调也由该线程顺序调用（要求回调
+    轻量、不阻塞，本项目的 OCR 回调均为非阻塞任务派发）。
+    """
 
-_INPUT_KEYBOARD = 1
-_KEYEVENTF_KEYUP = 0x0002
-_PROBE_VK = 0x07  # Windows 保留虚拟键（0x00~0x07 未定义），无字符/无绑定，对前台应用无影响
+    def __init__(self) -> None:
+        self._cmdq: "queue.Queue[tuple]" = queue.Queue()
+        self._id_to_cb: Dict[int, Tuple[str, Callable[[], None]]] = {}
+        self._name_to_id: Dict[str, int] = {}
+        self._next_id = 1
+        self._stopping = False
+        self._ready = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._thread_id = 0
 
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stopping = False
+        self._ready.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name="hotkey-register")
+        self._thread.start()
+        self._ready.wait(timeout=3.0)
 
-def _send_probe_keys() -> bool:
-    """注入一对 VK 0x07 按下/抬起，用于探测低级键盘钩子是否仍在接收事件"""
-    try:
-        user32 = ctypes.windll.user32
-        user32.SendInput.restype = ctypes.c_uint
-        user32.SendInput.argtypes = [ctypes.c_uint,
-                                     ctypes.POINTER(_INPUT), ctypes.c_int]
+    @property
+    def alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
 
-        def _one(up: bool) -> _INPUT:
-            inp = _INPUT()
-            inp.type = _INPUT_KEYBOARD
-            inp.u.ki.wVk = _PROBE_VK
-            inp.u.ki.dwFlags = _KEYEVENTF_KEYUP if up else 0
-            return inp
+    def _run(self) -> None:
+        user32 = _user32
+        user32.RegisterHotKey.restype = ctypes.c_int
+        user32.RegisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                          ctypes.c_uint, ctypes.c_uint]
+        user32.UnregisterHotKey.restype = ctypes.c_int
+        user32.UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.PeekMessageW.restype = ctypes.c_int
+        user32.PeekMessageW.argtypes = [ctypes.POINTER(_MSG), ctypes.c_void_p,
+                                        ctypes.c_uint, ctypes.c_uint,
+                                        ctypes.c_uint]
+        _kernel32.GetCurrentThreadId.restype = ctypes.c_ulong
+        self._thread_id = _kernel32.GetCurrentThreadId()
+        self._ready.set()
 
-        arr = (_INPUT * 2)(_one(False), _one(True))
-        sent = user32.SendInput(2, arr, ctypes.sizeof(_INPUT))
-        return sent == 2
-    except Exception as e:
-        logger.warning("钩子探测键注入失败: %s", e)
-        return False
+        msg = _MSG()
+        while not self._stopping:
+            try:
+                # 1) 执行注册/注销命令（RegisterHotKey 必须由接收
+                #    WM_HOTKEY 的线程调用）
+                while True:
+                    try:
+                        cmd = self._cmdq.get_nowait()
+                    except queue.Empty:
+                        break
+                    op = cmd[0]
+                    if op == "reg":
+                        _, hotkey, mod, vk, callback, ev, box = cmd
+                        # 同名重注册：先注销旧 id
+                        old_id = self._name_to_id.get(hotkey)
+                        if old_id is not None:
+                            user32.UnregisterHotKey(None, old_id)
+                            self._id_to_cb.pop(old_id, None)
+                        new_id = self._next_id
+                        self._next_id += 1
+                        if user32.RegisterHotKey(None, new_id, mod, vk):
+                            self._name_to_id[hotkey] = new_id
+                            self._id_to_cb[new_id] = (hotkey, callback)
+                            box["ok"] = True
+                        else:
+                            err = ctypes.get_last_error()
+                            reason = ("已被其它程序占用" if
+                                      err == ERROR_HOTKEY_ALREADY_REGISTERED
+                                      else f"错误码 {err}")
+                            logger.warning("RegisterHotKey 失败 %s: %s",
+                                           hotkey, reason)
+                            box["ok"] = False
+                            box["err"] = reason
+                        ev.set()
+                    elif op == "unreg":
+                        _, hotkey, ev, box = cmd
+                        hid = self._name_to_id.pop(hotkey, None)
+                        if hid is not None:
+                            user32.UnregisterHotKey(None, hid)
+                            self._id_to_cb.pop(hid, None)
+                        box["ok"] = True
+                        ev.set()
+                    elif op == "quit":
+                        self._stopping = True
+                        break
+
+                # 2) 消息循环（PeekMessage 轮询，风格与消息泵补丁一致）
+                while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0,
+                                          _PM_REMOVE):
+                    if msg.message == WM_HOTKEY:
+                        info = self._id_to_cb.get(msg.wParam or 0)
+                        if info is not None:
+                            try:
+                                info[1]()
+                            except Exception:
+                                logger.exception("热键 %s 回调异常",
+                                                 info[0])
+                    elif msg.message == WM_QUIT:
+                        self._stopping = True
+                        break
+                    else:
+                        user32.TranslateMessage(ctypes.byref(msg))
+                        user32.DispatchMessageW(ctypes.byref(msg))
+
+                time.sleep(0.02)
+            except Exception:
+                # 热键线程绝不因异常退出
+                logger.exception("热键线程异常（已忽略，继续运行）")
+                time.sleep(0.1)
+
+        # 退出前注销全部系统热键
+        for hid in list(self._name_to_id.values()):
+            try:
+                user32.UnregisterHotKey(None, hid)
+            except Exception:
+                pass
+        self._name_to_id.clear()
+        self._id_to_cb.clear()
+
+    def register(self, hotkey: str,
+                 callback: Callable[[], None]) -> Tuple[bool, str]:
+        parsed = _parse_hotkey(hotkey)
+        if parsed is None:
+            return False, "无法识别的键名"
+        mod, vk = parsed
+        ev = threading.Event()
+        box: Dict[str, Any] = {}
+        self._cmdq.put(("reg", hotkey, mod, vk, callback, ev, box))
+        if not ev.wait(timeout=2.0):
+            return False, "热键线程无响应"
+        return box.get("ok", False), box.get("err", "")
+
+    def unregister(self, hotkey: str) -> None:
+        if hotkey not in self._name_to_id:
+            return
+        ev = threading.Event()
+        box: Dict[str, Any] = {}
+        self._cmdq.put(("unreg", hotkey, ev, box))
+        ev.wait(timeout=2.0)
+
+    def close(self) -> None:
+        ev = threading.Event()
+        self._cmdq.put(("quit", ev))
+        ev.wait(timeout=2.0)
 
 
 def _patch_keyboard_pump(kb: Any) -> bool:
@@ -117,24 +306,19 @@ def _patch_keyboard_pump(kb: Any) -> bool:
 
         wk.SetWindowsHookEx = _set_hook
 
-        # 全局事件计数器：钩子线程每收到一个键盘事件 +1，
-        # 用于探测系统层钩子是否被 Windows 静默移除
-        wk._snap_event_count = 0
-
         # ── 保护 1：事件预处理异常不中断事件流（钩子线程）──
         listener = getattr(kb, "_listener", None)
         if listener is not None:
             orig_pre = listener.pre_process_event
 
-            def _counting_pre(event: Any, _orig: Callable = orig_pre) -> bool:
-                wk._snap_event_count += 1
+            def _guarded_pre(event: Any, _orig: Callable = orig_pre) -> bool:
                 try:
                     return _orig(event)
                 except Exception:
                     logger.exception("热键事件预处理异常（已忽略该事件）")
                     return False
 
-            listener.pre_process_event = _counting_pre
+            listener.pre_process_event = _guarded_pre
 
         # ── 保护 2：处理线程的回调异常不再杀死线程 ──
         # keyboard 原版 GenericListener.process 无任何 try 保护，
@@ -216,39 +400,48 @@ def _patch_keyboard_pump(kb: Any) -> bool:
 
 
 class HotkeyManager:
-    """全局热键管理器"""
+    """全局热键管理器（RegisterHotKey 主后端 + keyboard 钩子回退）"""
 
     # 两次重连的最小间隔（秒）：防止异常场景下高频重建
     MIN_RECONNECT_INTERVAL = 20.0
 
     def __init__(self) -> None:
-        self._callbacks: HotkeyBinding = {}
-        self._running = False
-        self._thread = None
+        self._callbacks: HotkeyBinding = {}  # hotkey -> 原始回调
+        self._backend_map: Dict[str, str] = {}  # hotkey -> "reg"/"hook"
         self._keyboard = None
+        self._hook_available = False
+        self._reg: Optional[_RegisterHotkeyBackend] = None
         self._available = False
         self._last_reconnect = 0.0
-        self._emergency_log: list = []
+        self._restart_log: list = []
         self._binding_provider: Optional[Callable[[], HotkeyBinding]] = None
 
     def init(self) -> bool:
-        """初始化热键系统（同时修补 keyboard 库的消息泵缺陷）"""
+        """初始化热键系统
+
+        主后端 RegisterHotKey 不依赖任何第三方库；
+        keyboard 库仅作为回退路径按需加载（同时修补其消息泵缺陷）。
+        """
+        self._reg = _RegisterHotkeyBackend()
+        self._reg.start()
+        if not self._reg.alive:
+            logger.error("RegisterHotKey 热键线程启动失败")
+            return False
         try:
             import keyboard
             self._keyboard = keyboard
             _patch_keyboard_pump(keyboard)
-            self._available = True
-            return True
+            self._hook_available = True
         except ImportError:
-            logger.warning("keyboard模块未安装，全局热键不可用")
-            self._available = False
-            return False
+            logger.warning("keyboard 模块未安装，占用冲突的热键将无法回退")
+        self._available = True
+        return True
 
     @staticmethod
     def _safe_callback(callback: Callable[[], None],
                        hotkey: str) -> Callable[[], None]:
-        """包装用户回调：异常只记日志，绝不让异常冒泡到
-        keyboard 的事件循环（原版处理线程会被异常杀死）"""
+        """包装用户回调：异常只记日志，绝不让异常冒泡到热键线程
+        （keyboard 原版处理线程会被异常杀死）"""
 
         def _wrapped() -> None:
             try:
@@ -269,46 +462,60 @@ class HotkeyManager:
             self.register(hotkey, callback)
 
     def register(self, hotkey: str, callback: Callable[[], None]) -> bool:
-        """注册全局热键
+        """注册全局热键（优先 RegisterHotKey，失败回退键盘钩子）
 
         Args:
             hotkey: 快捷键字符串，如 "ctrl+shift+f"
-            callback: 回调函数
+            callback: 回调函数（需轻量、非阻塞）
         """
         if not self._available:
             logger.warning(f"热键不可用，无法注册: {hotkey}")
             return False
-        
-        try:
-            # 不使用 suppress=True：虽然可以阻止组合键传递给前台应用，
-            # 但在 Windows 低级键盘钩子中，suppress 可能因异常导致修饰键
-            # （Shift/Ctrl/Alt）的"抬起"事件丢失，使系统认为修饰键一直
-            # 处于按下状态，造成全局键盘输入混乱。
-            # 先移除同名热键，避免重复注册导致回调被触发多次
-            if hotkey in self._callbacks:
-                try:
-                    self._keyboard.remove_hotkey(hotkey)
-                except Exception:
-                    pass
-            self._keyboard.add_hotkey(hotkey, self._safe_callback(callback, hotkey))
+        if hotkey in self._callbacks:
+            self.unregister(hotkey)
+
+        safe = self._safe_callback(callback, hotkey)
+
+        # 主后端：系统热键表（不占钩子、不会被系统移除、免探测）
+        ok, reason = self._reg.register(hotkey, safe)
+        if ok:
             self._callbacks[hotkey] = callback
-            logger.info(f"已注册热键: {hotkey}")
+            self._backend_map[hotkey] = "reg"
+            logger.info(f"已注册热键（RegisterHotKey）: {hotkey}")
             return True
-        except Exception as e:
-            logger.error(f"注册热键失败 {hotkey}: {e}")
-            return False
-    
+
+        # 回退后端：keyboard 低级键盘钩子
+        if self._hook_available:
+            try:
+                # 不使用 suppress=True：可能丢失修饰键抬起事件，造成
+                # 全局键盘输入混乱。
+                self._keyboard.add_hotkey(hotkey, safe)
+                self._callbacks[hotkey] = callback
+                self._backend_map[hotkey] = "hook"
+                logger.info(f"已注册热键（钩子回退，RegisterHotKey {reason}）: "
+                            f"{hotkey}")
+                return True
+            except Exception as e:
+                logger.error(f"注册热键失败 {hotkey}: {e}")
+                return False
+
+        logger.error(f"注册热键失败 {hotkey}: {reason}，且回退后端不可用")
+        return False
+
     def unregister(self, hotkey: str) -> None:
         """取消注册热键"""
-        if not self._available or hotkey not in self._callbacks:
+        if hotkey not in self._callbacks:
             return
-        
+        backend = self._backend_map.pop(hotkey, None)
         try:
-            self._keyboard.remove_hotkey(hotkey)
-            del self._callbacks[hotkey]
+            if backend == "reg" and self._reg:
+                self._reg.unregister(hotkey)
+            elif backend == "hook" and self._keyboard:
+                self._keyboard.remove_hotkey(hotkey)
         except Exception as e:
             logger.error(f"取消热键失败 {hotkey}: {e}")
-    
+        self._callbacks.pop(hotkey, None)
+
     def unregister_all(self) -> None:
         """取消所有热键"""
         for hotkey in list(self._callbacks.keys()):
@@ -318,23 +525,22 @@ class HotkeyManager:
     def has_callbacks(self) -> bool:
         """当前是否有已注册的热键回调"""
         return bool(self._callbacks)
-    
+
+    @property
+    def backend_summary(self) -> str:
+        """当前热键后端分布（诊断用），如 'reg=3 hook=0'"""
+        reg = sum(1 for v in self._backend_map.values() if v == "reg")
+        hook = len(self._backend_map) - reg
+        return f"reg={reg} hook={hook}"
+
     def reconnect(self) -> bool:
-        """恢复失效的全局热键（锁屏/休眠/UAC/显示切换后自动修复）
-
-        关键修复：不再销毁并重建 keyboard 模块。原实现每次重连都会
-        遗留 2 个永不退出的监听线程与底层钩子（内存/句柄持续增长，
-        长时间开机运行可从数百 MB 涨到数 GB），且 keyboard.unhook_all()
-        从不真正调用 UnhookWindowsHookEx。
-
-        现在改为：由常驻监听线程自行卸载并重新安装低级键盘钩子
-        （低级钩子只能在其安装线程内装卸），再重新登记回调。
-        线程数与句柄数保持不变，可无限次重连。
-        """
-        if not self._callbacks:
-            return False
+        """恢复失效的全局热键（仅钩子回退的键需要；RegisterHotKey
+        键由系统管理，锁屏/解锁/显示切换后自动恢复，无需重连）"""
+        hook_keys = [k for k, v in self._backend_map.items() if v == "hook"]
+        if not hook_keys:
+            return True
         kb = self._keyboard
-        if not kb or not self._available:
+        if not kb or not self._hook_available:
             return False
 
         now = time.time()
@@ -343,8 +549,10 @@ class HotkeyManager:
             return False
         self._last_reconnect = now
 
-        saved = dict(self._callbacks)
-        self._callbacks.clear()
+        saved = {k: self._callbacks[k] for k in hook_keys}
+        for k in hook_keys:
+            self._backend_map.pop(k, None)
+            self._callbacks.pop(k, None)
         try:
             kb.unhook_all()  # 清空 Python 侧回调表（不触碰系统钩子）
         except Exception:
@@ -372,75 +580,63 @@ class HotkeyManager:
             try:
                 kb.add_hotkey(hotkey, self._safe_callback(callback, hotkey))
                 self._callbacks[hotkey] = callback
+                self._backend_map[hotkey] = "hook"
                 reconnected += 1
             except Exception as e:
                 logger.warning("重连热键失败 %s: %s", hotkey, e)
 
-        logger.info("全局热键已恢复 (%d/%d)", reconnected, len(saved))
+        logger.info("钩子回退热键已恢复 (%d/%d)", reconnected, len(saved))
         return reconnected > 0
 
-    def probe_alive(self, timeout: float = 2.0) -> bool:
-        """主动探测系统层键盘钩子是否存活
+    def ensure_alive(self) -> bool:
+        """综合健康检查，失效自动恢复
 
-        Windows 会在回调超时、显示模式切换、UAC 弹窗、全屏应用等场景
-        静默移除低级键盘钩子，且不提供任何查询接口。原实现（检查
-        Python 层 _hooks 字典）永远返回 True，导致失效后永不自愈。
-
-        探测原理：注入一对 Windows 保留虚拟键 VK 0x07（0x00~0x07 为
-        未定义键，不产生字符、无系统语义、对前台应用无影响），钩子
-        线程的事件计数器应随之增长；超时未增长即判定钩子已死亡。
+        - RegisterHotKey 后端：检查热键线程是否存活（系统热键表本身
+          由内核管理，不会失效），线程死亡则限频重启并重新注册
+        - 钩子回退键：检查事件队列是否积压（处理线程停滞）
         """
-        kb = self._keyboard
-        if not kb or not self._available:
-            return False
-        if not self._callbacks:
-            return False
-        wk = getattr(kb, "_winkeyboard", None)
-        if wk is None or not getattr(wk, "_snap_patched", False):
-            return bool(self._callbacks)  # 无补丁时退化为表检查
-        base = getattr(wk, "_snap_event_count", 0)
-        if not _send_probe_keys():
-            return True  # 注入失败时保守认为存活（避免误报触发重建）
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if getattr(wk, "_snap_event_count", 0) > base:
-                return True
-            time.sleep(0.05)
-        return False
-
-    def ensure_alive(self, probe_timeout: float = 2.0) -> bool:
-        """综合健康检查：处理线程活性 + 系统钩子活性，失效自动恢复
-
-        供后台监控线程周期调用。返回 True 表示热键当前可用。
-        """
-        kb = self._keyboard
-        if not kb or not self._available or not self._callbacks:
+        if not self._available or not self._callbacks:
             return False
 
-        # 1) 处理线程活性：事件队列持续积压说明线程已死亡或被卡死。
-        #    （process/pre_process 已加异常保护，正常情况下不会发生；
-        #    此为防御性兜底，恢复手段为限频的紧急重建。）
-        listener = getattr(kb, "_listener", None)
-        queue = getattr(listener, "queue", None)
-        try:
-            if hasattr(queue, "qsize"):
-                backlog = queue.qsize()
-            elif queue is not None:
-                backlog = len(queue)
-            else:
+        # 1) RegisterHotKey 线程活性
+        if self._reg is not None and not self._reg.alive:
+            now = time.time()
+            self._restart_log = [t for t in self._restart_log
+                                 if now - t < _EMERGENCY_COOLDOWN]
+            if len(self._restart_log) >= _EMERGENCY_MAX_PER_DAY:
+                logger.error("热键线程重启超出限频（24h 内 %d 次），跳过",
+                             len(self._restart_log))
+                return False
+            self._restart_log.append(now)
+            logger.warning("RegisterHotKey 热键线程已停止，执行重启恢复")
+            reg_keys = {k: v for k, v in self._callbacks.items()
+                        if self._backend_map.get(k) == "reg"}
+            self._reg.close()
+            self._reg = _RegisterHotkeyBackend()
+            self._reg.start()
+            restored = 0
+            for hotkey, callback in reg_keys.items():
+                if self.register(hotkey, callback):
+                    restored += 1
+            logger.info("热键线程重启完成，恢复 %d/%d 个热键",
+                        restored, len(reg_keys))
+            return self._reg.alive
+
+        # 2) 钩子回退键：处理线程队列积压检测（无注入探测——注入保留
+        #    虚拟键会在 LTSC 等精简系统上触发 ms-gamingoverlay 弹窗）
+        if self._hook_available:
+            kb = self._keyboard
+            listener = getattr(kb, "_listener", None)
+            q = getattr(listener, "queue", None)
+            try:
+                backlog = q.qsize() if hasattr(q, "qsize") else \
+                    (len(q) if q is not None else 0)
+            except Exception:
                 backlog = 0
-        except Exception:
-            backlog = 0
-        if backlog > _QUEUE_BACKLOG_LIMIT:
-            logger.error("热键处理线程疑似停滞（队列积压 %d 个事件），"
-                         "尝试紧急恢复", backlog)
-            return self._emergency_rebuild()
-
-        # 2) 系统钩子活性：探测失败则重挂钩子
-        if not self.probe_alive(probe_timeout):
-            logger.warning("探测到系统键盘钩子已失效（Windows 静默移除），"
-                           "正在自动恢复...")
-            return self.reconnect()
+            if backlog > _QUEUE_BACKLOG_LIMIT:
+                logger.error("热键处理线程疑似停滞（队列积压 %d 个事件），"
+                             "尝试紧急恢复", backlog)
+                return self._emergency_rebuild()
         return True
 
     def _emergency_rebuild(self) -> bool:
@@ -450,14 +646,14 @@ class HotkeyManager:
         每 24 小时最多 2 次，超出则退回普通重连并告警。
         """
         now = time.time()
-        self._emergency_log = [t for t in self._emergency_log
-                               if now - t < _EMERGENCY_COOLDOWN]
-        if len(self._emergency_log) >= _EMERGENCY_MAX_PER_DAY:
+        self._restart_log = [t for t in self._restart_log
+                             if now - t < _EMERGENCY_COOLDOWN]
+        if len(self._restart_log) >= _EMERGENCY_MAX_PER_DAY:
             logger.error("紧急重建超出限频（24h 内 %d 次），跳过",
-                         len(self._emergency_log))
+                         len(self._restart_log))
             return self.reconnect()
-        self._emergency_log.append(now)
-        logger.warning("执行紧急重建（24h 内第 %d 次）", len(self._emergency_log))
+        self._restart_log.append(now)
+        logger.warning("执行紧急重建（24h 内第 %d 次）", len(self._restart_log))
 
         import sys
         kb = self._keyboard
@@ -466,19 +662,28 @@ class HotkeyManager:
                 kb.unhook_all()
             except Exception:
                 pass
-        self._callbacks.clear()
+        for hotkey in [k for k, v in self._backend_map.items() if v == "hook"]:
+            self._backend_map.pop(hotkey, None)
+            self._callbacks.pop(hotkey, None)
         self._keyboard = None
-        self._available = False
+        self._hook_available = False
         time.sleep(0.3)
         for mod in list(sys.modules.keys()):
             if mod == "keyboard" or mod.startswith("keyboard."):
                 del sys.modules[mod]
-        if not self.init():
+        try:
+            import keyboard
+            self._keyboard = keyboard
+            _patch_keyboard_pump(keyboard)
+            self._hook_available = True
+        except ImportError:
+            logger.error("紧急重建失败：keyboard 模块无法重新导入")
             return False
         reconnected = 0
         if self._binding_provider is not None:
             for hotkey, callback in self._binding_provider().items():
-                if self.register(hotkey, callback):
+                if self._backend_map.get(hotkey) == "hook" \
+                        and self.register(hotkey, callback):
                     reconnected += 1
         else:
             logger.warning("未设置绑定提供器，紧急重建后热键为空")
@@ -490,32 +695,22 @@ class HotkeyManager:
         self._binding_provider = provider
 
     def is_alive(self) -> bool:
-        """检测键盘钩子是否仍然存活
-
-        Windows 可能在以下场景静默移除低级键盘钩子：
-        - 显示模式切换（全屏应用、分辨率变更）
-        - UAC 提权弹窗
-        - 某些安全软件/游戏的反作弊系统
-        - 钩子回调超时
-
-        通过检查 keyboard 内部钩子状态来判断是否需要重连。
-        """
-        if not self._available or not self._keyboard:
+        """热键系统是否可用（RegisterHotKey 线程存活 + 有已注册热键）"""
+        if not self._available or not self._callbacks:
             return False
-        try:
-            # keyboard 库内部的 _hooks 字典记录了活跃钩子
-            # 如果没有任何钩子，说明已被系统移除
-            hooks = getattr(self._keyboard, '_hooks', None)
-            if hooks is None:
-                return bool(self._callbacks)
-            # 有钩子记录就算存活
-            return bool(hooks)
-        except Exception:
-            return bool(self._callbacks)
+        if self._reg is not None:
+            return self._reg.alive
+        return bool(self._keyboard)
 
     def close(self) -> None:
-        """关闭热键管理器（监听线程为守护线程，随进程退出）"""
+        """关闭热键管理器（守护线程随进程退出）"""
         self.unregister_all()
+        if self._reg is not None:
+            try:
+                self._reg.close()
+            except Exception:
+                pass
+            self._reg = None
         if self._keyboard:
             try:
                 self._keyboard.unhook_all()

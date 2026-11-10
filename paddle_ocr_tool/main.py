@@ -212,10 +212,14 @@ class PaddleOCRTool:
         """后台注册全局热键，并启动锁屏监控"""
         self._ocr_ready.wait(timeout=30)
         if hotkey_manager.init():
-            # 提供绑定快照，供处理线程死亡时的紧急重建恢复热键
+            # 提供绑定快照，供热键线程异常时的恢复流程重新注册
             hotkey_manager.set_binding_provider(self._hotkey_bindings)
             self._register_hotkeys()
-            logger.info("全局热键已注册")
+            logger.info("全局热键已注册（后端分布：%s）",
+                        hotkey_manager.backend_summary)
+            if "hook=0" not in hotkey_manager.backend_summary:
+                logger.warning("部分热键因被占用回退到键盘钩子，"
+                               "如长期失效请更换热键组合")
         # 启动系统锁屏/解锁监控，自动恢复失效的全局热键
         self._start_session_monitor()
 
