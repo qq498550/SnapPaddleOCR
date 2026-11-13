@@ -35,3 +35,6 @@ Thumbs.db
 
 # installer output（安装包与编译日志，体积过大不入库）
 installer_output/
+
+# CodeBuddy IDE 本地数据
+.codebuddy/

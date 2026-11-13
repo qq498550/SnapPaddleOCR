@@ -11,6 +11,7 @@ from .code_scanner import CodeScanner, DetectedCode
 from .config import config
 from .env_config import setup_paddle_env, setup_dpi_awareness, ensure_sys_path
 from .hotkey import hotkey_manager
+from .layout import format_smart
 from .ocr_engine import (
     DEFAULT_PROFILE,
     OCREngine,
@@ -581,6 +582,16 @@ class PaddleOCRTool:
         texts = [d["text"].strip() for d in items if d.get("text", "").strip()]
         if not texts:
             return ""
+        if layout == "smart":
+            # 智能排版：几何聚类 + 多信号判定段落归属；无法可靠分析时
+            # （缺坐标/多栏/异常）降级为逐行输出，保证不出错
+            try:
+                smart = format_smart(
+                    items, threshold=float(config.get("layout_para_threshold", 4)))
+                if smart is not None:
+                    return smart
+            except Exception:
+                logger.exception("智能排版失败，降级为逐行输出")
         if layout == "none":
             return "  ".join(texts)
         return "\n".join(texts)

@@ -44,7 +44,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_copy": True,
     "show_toast": True,
     "show_result_window": True,
-    "result_layout": "raw",  # raw 逐段换行 / none 不换行
+    "result_layout": "raw",  # raw 逐段换行 / smart 智能排版 / none 不换行
+    # 智能排版的段落判定阈值：相邻行合并信号得分 ≥ 该值判为同段折行，
+    # 越大越保守（更多保留分行），可调范围 2~8
+    "layout_para_threshold": 4,
 
     # 扫码设置
     "scan_codes": True,  # 截图时自动解析二维码 / 条形码并复制内容

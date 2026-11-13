@@ -263,8 +263,9 @@ class SettingsWindow:
 
         # ── 排版规则 ──
         layout_options = {
-            "raw":  "不做处理（逐段换行）",
-            "none": "不换行（合并为一行）",
+            "raw":   "不做处理（逐段换行）",
+            "smart": "智能排版（自动合并折行段落）",
+            "none":  "不换行（合并为一行）",
         }
         card5 = _card(scroll_frame, "📝  识别排版")
         self._layout_var = tk.StringVar(value="不做处理（逐段换行）")
